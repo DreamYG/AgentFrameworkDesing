@@ -1,0 +1,9 @@
+{
+  "name": "@nexus/mcp-pm-tools",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Nexus PM Tools MCP Server — project.*, task.*, risk.*, milestone.*",
+  "scripts": { "build": "tsc", "start": "node dist/index.js", "typecheck": "tsc --noEmit" },
+  "dependencies": {},
+  "devDependencies": { "typescript": "^5.5.0" }
+}

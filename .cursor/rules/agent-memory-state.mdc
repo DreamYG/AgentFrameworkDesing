@@ -1,0 +1,80 @@
+---
+description: Nexus 五层记忆、金字塔 Compact、SessionShadow 与 Checkpoint
+globs: packages/memory/**/*,packages/kernel/**/compact/**/*
+alwaysApply: false
+---
+
+# 记忆与上下文规范
+
+## 五层记忆（MEM-0–4）
+
+| 层 | 名称 | 存储 | 更新方式 |
+|----|------|------|---------|
+| MEM-0 | 工作记忆 | 上下文窗口 | Compact L1→L4 |
+| MEM-1 | 会话记忆 | Redis | **SessionShadow** @ `post_sampling`（fire-and-forget） |
+| MEM-2 | 情景记忆 | PG + Qdrant | 检索注入 `pre_plan` |
+| MEM-3 | 程序性技能 | FS + SQLite FTS | L0 索引 / L1-L2 渐进披露 |
+| MEM-4 | 组织知识 | Qdrant + ES | RAG + RBAC |
+
+**禁止** 在主推理循环同步写 MEM-1 摘要。
+
+## 金字塔 Compact（v3.0 标准名，禁用旧称）
+
+| 级别 | 触发条件 | LLM | 创新点 |
+|------|---------|-----|-------|
+| **L1** Time-Gap Micro Compact | 消息间隔 > 30 min 或工具结果 > 4KB | 无 | 时间间隔作"认知边界"信号 |
+| **L2** Evidence-Aware Compact | Token ≥ 70% 窗口 | 无；写 EvidenceRegistry | 识别并保留后续推理的证据 |
+| **L3** Session Memory Graft | Token ≥ 80% 窗口 | 无；嫁接 SessionShadow 摘要 | 证据跨越压缩边界存活 |
+| **L4** Legacy Full Compact | L1–L3 仍超限 | 1 次；保留全部证据 ID | 全文压缩兜底 |
+
+`on_compact` 后必须刷新 EvidenceRegistry 并 Checkpoint（`reason=post_compact`）。
+
+## EvidenceRegistry 治理
+
+- 启发式标记路径/URL/代码/表格/堆栈（零 LLM）
+- TTL 20 turns + 单 Run ≤ 50 条 + `wasReferenced=true` 加权保留
+
+## SessionShadow（B4）
+
+- 监听 `post_sampling`，fire-and-forget
+- 反膨胀：`session-summary.ts` 版本化 + 决策去重 + `openQuestions` 自动清理
+- 产出 `SessionSummary`（progressSummary ≤500 字符 + activeEvidenceIds）
+
+## Context Engineering 管线顺序（§9.2）
+
+```
+System+身份+技能L0（stable_prefix）
+  → 冻结会话快照（MEM-1）
+  → 环境快照（MEM-0 EnvironmentInjector）
+  → 情景/RAG（MEM-2/4，按需）
+  → Token 裁剪（Compact L1→L4 级联）
+```
+
+## Phase-Aware Context Engineering（§9.6）
+
+| Phase | 典型大小 | 推荐策略 | 缓存命中目标 |
+|-------|---------|---------|-------------|
+| Phase 1 意图 | 8K–15K | `summary_prefix` | ≥ 90% |
+| Phase 2 执行 | 20K–80K | `sliding_window + rag_augmented` | ≥ 75% |
+| Phase 3 连接 | 5K–12K | `full_context / rag_augmented` | ≥ 85% |
+
+上下文策略类型：`full_context` / `sliding_window` / `summary_prefix` / `rag_augmented` / `checkpoint_restore` / `aggressive_compact`
+
+## Checkpoint（8 个语义卡点，§5.5）
+
+| reason 标记 | 触发时机 |
+|------------|---------|
+| `post_model_output` | 每次 LLM 响应完成 |
+| `post_tool_execution` | 每批工具执行完成 |
+| `post_compact` | 任何级别 Compact 完成 |
+| `pre_approval_wait` | 进入 waiting_approval 前 |
+| `high_risk_decision` | 工具 riskLevel ≥ R2 完成后 |
+| `periodic_interval` | 每 N 次工具调用（默认 5）|
+| `graceful_shutdown` | SIGTERM 信号 |
+| `force_shutdown` | 宽限期超时强制落盘 |
+
+落盘 **fire-and-forget**（`IIncrementalPersistence`），不阻塞主循环。
+
+## AgentContext
+
+禁止全局可变状态；状态经 `AgentContext` + Checkpoint 传递。

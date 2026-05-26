@@ -1,0 +1,78 @@
+---
+description: Nexus Agent Runtime、Harness 推理环、钩子与编排模式
+globs: packages/kernel/**/*,packages/control-plane/**/*,packages/phase-*/**/*
+alwaysApply: false
+---
+
+# Agent Runtime 核心模式
+
+## 运行时形态（§5.1）
+
+| 形态 | 场景 | 实现位置 |
+|------|------|---------|
+| **Query Loop** | 对话式多轮任务 | `kernel/query-engine/query-loop.ts` |
+| **State Graph** | 复杂工作流 | `kernel/state-graph/`（策略由 control-plane 注入） |
+| **External Adapter** | 桥接外部 Agent | `kernel/` 适配端口 |
+
+编排选择走 `control-plane/orchestration`（IOrchestrationSelector），不在 Loop 内硬编码。
+
+## AgentRun 状态机（完整，§5.2–5.3）
+
+```
+created → running ⇄ waiting_approval | waiting_external
+  ↓ succeeded（自然终止）
+  ↓ failed → resuming（有 Checkpoint）→ succeeded/failed
+              ↓ handed_over（无法自动恢复 → 转人工）
+  ↓ cancelled（用户/系统主动取消）
+```
+
+- 状态终态：`succeeded` / `failed` / `handed_over` / `cancelled`（**不是** `completed`）
+- `resuming` 是独立中间态，从 `failed` 经 `recovery.attempt` 触发
+- 状态转换由 **Run Manager** 驱动；Query Loop 通过事件通知，**不直接赋值** `agentRun.status`
+
+## 韧性推理环（B1，每 Turn 包裹）
+
+```
+Phase A Pre-Flight → Phase B LLM（含降级）→ Phase C Tool（经 Gateway）
+→ Phase D Post-Turn（Compact 预判、指标、Checkpoint 触发）
+```
+
+- Phase B 降级链：HTTP 429→指数退避 → 切 fallbackModel → 切本地 Ollama → waiting_external
+- Phase C 工具分级：Level 1–3 错误**回填模型**（自愈）；Level 4 → Checkpoint + HITL
+- 预算四维：Token / 成本 / 步数 / 时间
+
+## Harness 生命周期钩子（全 11 个，§5.4）
+
+| 钩子 | 阻塞 | 要点 |
+|------|------|------|
+| `pre_plan` | 是 | 情景记忆、技能 L0 索引、EnvironmentInjector |
+| `post_plan` | 否 | 记录 Decision Chain（plan_step）|
+| `pre_tool` | 是 | 权限预检、参数脱敏、AutonomyScore 判定 |
+| `post_tool` | 否 | 审计、Backfiller、IToolResultBudget 截断 |
+| `post_sampling` | 否 | **SessionShadow 异步摘要（禁止阻塞）** |
+| `pre_complete` | 否 | 最终 Checkpoint 预写 |
+| `post_complete` | 否 | OERCD 异步、审计 flush、指标上报 |
+| `on_error` | 否 | Checkpoint 紧急落盘、HITL 升级 |
+| `on_compact` | 否 | 更新 EvidenceRegistry + Checkpoint（`post_compact`）|
+| `on_checkpoint` | 否 | 可观测事件流式推送 |
+| `on_shutdown` | 是（排水期） | GracefulShutdown 三阶段、SessionShadow 最终 flush |
+
+钩子**逻辑**在 Pack / ControlPlane 注册；`kernel/lifecycle/hooks.ts` 只调度。
+
+## 多 Agent 编排（Control Plane 层）
+
+- **Supervisor**：任务分解 + 子 Run 汇总（`delegate/` 权限锁死）
+- **Swarm**：Handoff 事件链，无中心协调
+- **Hierarchical**：多层规划 → 执行
+
+规范：不可变消息；声明能力描述；**maxSteps** 上限；子 Run 失败走 `IRetryPolicy` 降级。
+
+## IAgentRuntime 契约
+
+```typescript
+interface IAgentRuntime {
+  start(input: RuntimeInput): AsyncIterable<AgentStreamEvent>;
+  resume(runId: string, signal: ResumeSignal): AsyncIterable<AgentStreamEvent>;
+  cancel(runId: string, reason: string): Promise<void>;
+}
+```

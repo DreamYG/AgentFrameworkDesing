@@ -1,0 +1,59 @@
+---
+description: Nexus 治理外壳、护栏层级、HITL 与 OERCD 证据合规
+globs: packages/guardrails/**/*,packages/control-plane/**/*
+alwaysApply: false
+---
+
+# 安全与治理规范
+
+## 治理集中原则
+
+权限、审批、预算、审计、策略 **仅在 Control Plane + Guardrails**；Kernel/ Pack **调用端口**，不重复实现。
+
+```
+输入 → [Guardrails Input] → Runtime → [Guardrails Output] → 用户
+              ↓                              ↓
+         注入/PII/意图拒绝              脱敏/格式/毒性
+```
+
+## 输入护栏
+
+- Prompt 注入检测（含外部文档隔离 §17.7）
+- PII 脱敏；越界意图拒绝；Token 上限
+
+## 输出护栏
+
+- 密钥/路径/连接串过滤；schema 合规；可选毒性评分
+
+## 工具调用守卫
+
+```typescript
+interface IToolGuard {
+  check(tool: ToolDefinition, params: unknown, ctx: ToolContext): Promise<GuardResult>;
+}
+// allowed | denied | requiresApproval → approval-engine
+```
+
+R3+ / R4 / RX 走审批引擎；RX **禁止** 自动执行。
+
+## Human-in-the-Loop
+
+- `waiting_approval` 状态 + Checkpoint `pre_approval_wait`
+- 审批超时默认 5min → 降级/取消策略（Policy 配置）
+- AutonomyScore 低于阈值自动升级 HITL
+
+## 预算与速率
+
+- `budget-manager`：单 Run Token/成本/步数/时间
+- 异常消耗告警（>基线 3×）
+- 接入层限流：用户/租户/Agent 维度
+
+## OERCD 与证据（§15）
+
+- Observe → Execute → Reflect → Crystallize → Distribute → Curate
+- 技能/知识入库 **必须** `evidenceIds`；`IKnowledgeFederationGuard` 防负迁移
+- 学习在 `post_complete` **异步**，不阻塞响应
+
+## 接入层（Gateway）
+
+Webhook 签名必选；messageId 去重；身份映射失败 → 401 + 审计。

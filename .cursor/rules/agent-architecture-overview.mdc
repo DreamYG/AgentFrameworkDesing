@@ -1,0 +1,75 @@
+---
+description: Nexus v3.0 企业级 Agent 中间件架构原则、四层骨架与稳定性分级
+alwaysApply: true
+---
+
+# Nexus 架构总览（v3.0）
+
+> 权威蓝图：`docs/nexus-enterprise-agent-middleware-complete-solution.md`
+
+## 平台定位
+
+Nexus 是企业级 **AI 认知中间件**：自然语言意图 → 可审计、可治理、可恢复、可持续学习的企业系统操作。非单体 ChatBot。
+
+## 运行时分层（自顶向下）
+
+```
+Gateway（协议归一/签名/去重/限流）
+  → Control Plane（Intent/Registry/RunManager/Approval/Policy/Budget/Audit/Scheduler）
+  → Agent Runtime / Harness（QueryLoop/StateGraph/Hooks/Compact/Checkpoint/OERCD）
+  → Cross-Cutting（Memory/RAG, ToolGateway, Guardrails, Observability）
+  → Providers（LLM + Prompt Assembler + Cache）
+  → Infrastructure（PG/Redis/Qdrant/BullMQ/…）
+```
+
+## 四层演进骨架（变更策略）
+
+| 层 | 名称 | 职责 | 迭代节奏 |
+|----|------|------|---------|
+| L1 | 薄内核 / **Agent Harness 发动机** | QueryLoop、Compact、Checkpoint、Lifecycle；Tool/Memory **仅端口** | 极稳定，>6 月/版 |
+| L2 | 强控制面 | 注册、策略、审批、审计、预算、调度 | 季度 |
+| L3 | 可插拔能力包 | Phase1/2/3 Agent+Tool，Manifest 热插拔 | 月/周 |
+| L4 | 补偿层（可日落） | 过渡适配器，**必须标注 sunset 日期** | 临时 |
+
+## 七项长期稳定原则
+
+1. **薄内核** — Kernel 只有推理环，禁止业务域逻辑（如项目管理规则）
+2. **强控制面** — 权限/审批/审计/预算集中，禁止 Agent 各自鉴权
+3. **能力包化** — 业务以 Pack 注册；禁止 Pack 直接 import 其他 Pack 内部模块
+4. **策略驱动** — 行为由 Policy/FeatureFlag 配置，禁止 `if (toolName===…)` 硬编码
+5. **事件解耦** — Phase 间经 **Phase Bridge** 事件总线，禁止跨 Phase 函数直调
+6. **证据优先** — 决策/学习/技能入库必须有 Evidence 链（OERCD + EvidenceRegistry）
+7. **补偿可日落** — L4 适配器到期下线，禁止无限堆积
+
+## 稳定性分级 S0–S5
+
+| 级 | 范围 | 兼容承诺 |
+|----|------|---------|
+| S0 | 事件信封、错误码 | 永不变更 |
+| S1 | Kernel 公共接口 | 24 月 |
+| S2 | Control Plane 策略 API | 6 月 |
+| S3 | Core Pack API | 3 月 |
+| S4 | Biz Pack / 社区工具 | 不承诺 |
+| S5 | 补偿层 | 不承诺，自动日落 |
+
+## Phase 拓扑硬约束
+
+- 任一 Phase **可独立启动**；Phase1 不依赖 Phase2/3
+- Phase2 仅监听 `task.assigned_to_ai`；Phase3 监听 `notification.*` / `knowledge.synced`
+- 跨 Phase 协作 **仅事件**，见 `nexus-boundaries-dependencies.mdc`
+
+## Agent Harness 洋葱（L0–L6）
+
+外→内：治理外壳 → ToolGateway → Memory → Compact(L1–L4) → QueryLoop+ResilientLoop → 环境感知 → LLM。**内层不知业务 Phase；外层失败不击穿 L0/L2。**
+
+## 结构性盲区（实现时必须覆盖）
+
+| 编号 | 机制 |
+|------|------|
+| B1 | 韧性推理 Phase A–D |
+| B2 | 金字塔 Compact L1–L4 + EvidenceRegistry |
+| B3 | Prompt Cache（stable_prefix） |
+| B4 | SessionShadow @ `post_sampling` |
+| B5 | 流式事件背压 |
+| B6 | GracefulShutdown 多卡点 |
+| B7 | ContextBackfiller 环境回填 |

@@ -1,0 +1,9 @@
+{
+  "name": "@nexus/mcp-template",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Nexus MCP Server template — use create-nexus-mcp to scaffold",
+  "scripts": { "build": "tsc", "start": "node dist/server.js", "typecheck": "tsc --noEmit" },
+  "dependencies": {},
+  "devDependencies": { "typescript": "^5.5.0" }
+}

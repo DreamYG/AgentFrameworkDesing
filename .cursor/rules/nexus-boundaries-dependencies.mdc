@@ -1,0 +1,84 @@
+---
+description: Nexus 模块边界、包依赖方向、禁止项与核心架构决策 rationale
+alwaysApply: true
+---
+
+# Nexus 边界与依赖规则
+
+> 对照：`docs/nexus-enterprise-agent-middleware-complete-solution.md` §3.3–3.4、§17.2
+
+## 包依赖方向（只允许向下引用）
+
+```
+apps/* (api-gateway, console, cli)
+  ↓
+packages/phase-intent|phase-execution|phase-connection  ← L3 能力包（在 packages/ 下）
+  ↓ 仅通过端口/事件（Phase Bridge 事件总线）
+packages/control-plane/*  ──ports──►  packages/kernel/* (IAgentRuntime, ILifecycleHooks)
+packages/tool-gateway/*   ──ports──►  packages/kernel/*
+packages/memory/*         ──ports──►  packages/kernel/*
+packages/guardrails/*     ──ports──►  packages/kernel/*, packages/tool-gateway/*
+packages/observability/*  ──ports──►  全层（只读订阅）
+packages/providers/*      ──ports──►  packages/kernel/*
+packages/kernel/*         → packages/shared/* only
+packages/shared/*         → （叶子，无业务依赖）
+compensation/*            → 任意（L4，根目录），但 **kernel 禁止 import compensation**
+```
+
+> **路径说明**：Phase 能力包（L3）在 `packages/phase-intent`、`packages/phase-execution`、`packages/phase-connection`，**不是**根目录 `capability-packs/`。`compensation/`（L4）在根目录。
+
+## 禁止的依赖与耦合
+
+| 禁止 | 原因 |
+|------|------|
+| `kernel/*` import `control-plane` 实现类 | 破坏薄内核稳定性（S1） |
+| `query-loop` 直接改 `AgentRun` 状态机 | RunManager 专属；Loop 仅发事件/回调 |
+| `run-manager` 内含 LLM/工具推理逻辑 | 会话调度 vs 单 Run 推理环分离（§3.4.4） |
+| Pack A import Pack B 内部模块 | 能力包化；用 Phase Bridge 事件 |
+| Agent/Tool 内嵌权限/审批逻辑 | 强控制面集中治理 |
+| 主循环同步写 Session 摘要 | B4：必须 `post_sampling` + SessionShadow 异步 |
+| Compact 使用 Micro/Session/Project 旧名 | v3.0 统一 L1–L4 命名（§9.3） |
+| 工具绕过 `buildTool` 工厂注册 | Fail-Closed 安全默认值失效 |
+| 无 `evidenceIds` 的技能入库 | 证据优先原则 |
+| L4 补偿模块无 `sunsetDate` | 补偿可日落原则 |
+
+## 组件职责边界（Kernel）
+
+| 组件 | 做 | 不做 |
+|------|-----|------|
+| Query Loop | 推理环、工具分发、终止判定 | 业务路由、审批 |
+| Compact Engine | L1–L4 级联、Token 预算 | 知识检索、持久化记忆 |
+| Checkpoint | 语义卡点快照 | 调度、超时 |
+| Tool Gateway | 路由、前后置管线 | 工具业务实现 |
+| Lifecycle Hooks | 注册与按序调度 | 钩子业务实现 |
+| State Graph | 节点/边执行 | 编排策略选择（Control Plane 注入） |
+| Run Manager | AgentRun CRUD、状态机、调度 | 单 Run 内 while 循环 |
+
+## Run Manager vs Query Loop（硬约束）
+
+- **Run Manager**（`control-plane/run-manager`）：`created→running→waiting_*→completed/failed`；审批挂起恢复
+- **Query Loop**（`kernel/query-engine`）：单 Run 内 Turn 循环；**不得** `agentRun.status = …`
+- **IAgentRuntime**：Kernel 对外唯一运行时入口（`start/resume/cancel`）
+
+## 核心决策与 rationale
+
+| 决策 | 逻辑 |
+|------|------|
+| Tool/Memory 外置包 | Harness 发动机与手脚分离；内核版本年更，工具周更 |
+| 金字塔 Compact 四级 | B2：时间边界+证据留存；L3 嫁接 SessionShadow 零 LLM |
+| Resilient Loop Phase A–D | B1：工具失败/模型降级不击穿 Run |
+| `post_sampling` 钩子 | B4：记忆更新与推理解耦，保 Prompt Cache 前缀稳定 |
+| buildTool Fail-Closed | 未声明特征→最严默认，避免工具注册遗漏导致越权 |
+| 多卡点 Checkpoint | B6：语义恢复点优于纯计数；审批/Compact/停机各有 reason |
+| stable_prefix + dynamic_suffix | B3：前缀缓存命中率；动态内容后置 |
+| Phase 独立部署 | 积木式交付；降低 Phase2 阻塞 Phase1 上线 |
+| OERCD 学习心跳 | 证据优先的知识结晶；联邦守卫防负迁移（§15） |
+| ISunsetEngine | L4 技术债可控退役 |
+
+## 实现检查清单（PR 前）
+
+- [ ] 新代码落在正确 `packages/*` 包
+- [ ] 无向上/跨层违规 import
+- [ ] 治理逻辑在 control-plane / guardrails，不在 kernel
+- [ ] 公共契约变更标注 S0–S5 级别
+- [ ] 记忆/Compact/停机路径符合 B1–B7

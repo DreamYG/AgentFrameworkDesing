@@ -1,0 +1,67 @@
+---
+description: Nexus 统一工具网关、buildTool、风险等级与环境回填
+globs: packages/tool-gateway/**/*,capability-packs/**/tools/**/*
+alwaysApply: false
+---
+
+# 工具系统规范
+
+## 强制：buildTool 工厂（Fail-Closed）
+
+所有工具 **必须** 经 `tool-gateway/build-tool.ts` 注册。未声明字段默认值：
+
+- `isReadOnly=false`, `isConcurrencySafe=false`, `isIdempotent=false`
+- `reversibility='unknown'`, `environmentSideEffects=['none']`
+
+```typescript
+function buildTool<TIn, TOut>(
+  spec: Partial<ToolDefinition<TIn, TOut>> & {
+    name: string;
+    execute: ToolDefinition<TIn, TOut>['execute'];
+  },
+): ToolDefinition<TIn, TOut>;
+```
+
+## ToolDefinition 要点
+
+- `schema: JSONSchema7` — 执行前校验
+- `riskLevel: ToolRiskLevel` — R0–R4, RX（destructive 禁止 Agent 直执）
+- `characteristics: ToolSafetyCharacteristics`
+- `backfillContext?: ToolBackfillDeclaration` — B7 环境维度声明
+- `timeout` + `retryable` + `maxRetries`
+
+## 风险等级 → 策略
+
+| 等级 | 示例 | 策略 |
+|------|------|------|
+| R0 read | 查询、搜索 | 自动 + 审计 |
+| R1–R2 write | 评论、排期 | 策略/轻审批 |
+| R3 high | 合并、发布 | **必须** HITL |
+| R4 privileged | 凭据、资金 | 多人审批 |
+| RX destructive | DROP、批量删 | **禁止** Agent |
+
+审批判定在 `control-plane/approval-engine`，不在工具 `execute` 内。
+
+## 执行管线
+
+```
+pre_tool → Gateway（Schema/权限/审批）→ execute → post_tool
+  → IToolResultBudget.truncate → IContextBackfiller.apply
+```
+
+## IToolResultBudget
+
+超长结果必须截断并带 `paginationHint`；禁止单次工具炸毁上下文（B1）。
+
+## MCP / REST 适配
+
+外部工具经 `protocol-adapters/` 归一为 `ToolDefinition`；超时与错误映射为 `ToolExecutionError`。
+
+## 反模式
+
+```typescript
+// ❌ 绕过 Gateway 直接调下游 API
+// ❌ 吞异常 return { success: false }
+// ❌ 在 execute 内自行 requireApproval()
+// ✅ throw new ToolExecutionError(..., { retryable, context })
+```

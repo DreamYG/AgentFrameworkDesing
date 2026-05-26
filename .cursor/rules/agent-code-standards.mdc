@@ -1,0 +1,90 @@
+---
+description: Nexus monorepo 目录结构、TypeScript 规范与错误/Prompt/配置标准
+alwaysApply: true
+---
+
+# Nexus 工程规范
+
+## Monorepo 目录（`packages/` 优先）
+
+```
+nexus/
+├── packages/
+│   ├── kernel/          # L1 Harness：query-engine, compact, checkpoint, lifecycle, environment, oercd, state-graph
+│   ├── control-plane/   # L2：run-manager, approval, policy, budget, orchestration, context-policy, model-router, retry-policy, sunset-engine
+│   ├── tool-gateway/    # build-tool, result-budget, protocol-adapters
+│   ├── memory/          # session-shadow, episodic, skill-store, federation-guard
+│   ├── guardrails/
+│   ├── providers/       # prompt-assembler, prompt-cache(stable-prefix/cache-aware-compact)
+│   ├── observability/   # traces, metrics, decision-chain, cognitive-heatmap, explainability-api
+│   ├── shared/          # types, errors, events (S0)
+│   ├── phase-intent/    # L3 Phase 1 能力包（意图层）
+│   ├── phase-execution/ # L3 Phase 2 能力包（执行层）
+│   ├── phase-connection/# L3 Phase 3 能力包（连接层）
+│   └── infra/           # 基础设施胶水
+├── apps/
+│   ├── api-gateway/     # HTTP/WS 网关
+│   ├── console/         # 管理控制台
+│   └── cli/
+├── mcp-servers/         # MCP Server 独立进程（pm-tools, dev-tools, feishu, dingtalk, oa）
+├── compensation/        # L4 必须有 sunsetDate
+└── evals/
+```
+
+> Phase 能力包（L3）在 `packages/phase-*` 下，**不是**根目录 `capability-packs/`。`compensation/`（L4）在根目录。
+
+## TypeScript
+
+1. `strict: true`；公共 API 用 `interface`
+2. 联合类型 / `const enum` 优于运行时 enum
+3. `async/await`；`readonly` / `Readonly<T>` 优先
+4. 公共契约标注 `@stability S0|S1|…`（JSDoc）
+
+## 错误体系（`packages/shared/errors`）
+
+> 基类名为 `NexusError`（v3.0），不是 `AgentError`。
+
+```typescript
+/** Nexus 领域错误基类 */
+class NexusError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,         // 格式：DOMAIN.SUB_CODE
+    readonly retryable: boolean = false,
+    readonly context?: Readonly<Record<string, unknown>>,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = this.constructor.name;
+  }
+}
+
+class ToolExecutionError   extends NexusError {}
+class ProviderError        extends NexusError {}
+class GuardrailViolation   extends NexusError {}
+class OrchestrationError   extends NexusError {}
+class BudgetExhaustedError extends NexusError {}
+class ApprovalTimeoutError extends NexusError {}
+class CheckpointCorruptionError extends NexusError {}
+class PackLoadError        extends NexusError {}
+class RetrievalError       extends NexusError {}
+```
+
+## Prompt
+
+- 模板与逻辑 **分离**（`prompts.ts` / `providers/prompt-assembler.ts`）
+- System Prompt **六层**（Layer 1–4 = `stable_prefix`；Layer 5–6 = `dynamic_suffix`）详见 §17.5
+- 外部内容必须隔离（§17.7）；禁止日志打印完整 Prompt
+
+## 配置
+
+- 环境变量 → 启动时 Zod 校验的 config 对象；**fail-fast**
+- 密钥走 Secret Manager，禁止入库/入日志
+
+## 测试
+
+| 层级 | 范围 | 工具 |
+|------|------|------|
+| 单元 | 工具、Compact、护栏 | Vitest |
+| 集成 | AgentRun 端到端 | Mock LLM + 录制回放 |
+| 评估 | 任务成功率、韧性指标 | `evals/` |

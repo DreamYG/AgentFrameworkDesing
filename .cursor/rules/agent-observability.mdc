@@ -1,0 +1,48 @@
+---
+description: Nexus 可观测性、韧性/认知指标、Decision Chain 与流式 Trace
+globs: packages/observability/**/*,packages/kernel/**/query-engine/**/*
+alwaysApply: false
+---
+
+# 可观测性规范
+
+## 每次推理循环必须产出
+
+- **Trace**：traceId、steps、tokenUsage、cost、outcome
+- **Decision Chain**（risk≥R1）：plan/tool/approval/compact 节点，异步队列写入
+- **AgentStreamEvent**：支持背压与多消费者（B5）
+
+## 必采 Metrics
+
+| 指标 | 说明 |
+|------|------|
+| `agent.run.duration` | Run 端到端 |
+| `agent.turn.count` | 推理轮次 |
+| `agent.token.usage` | 按 Agent/模型 |
+| `agent.prompt_cache.hit_rate` | B3 前缀缓存 |
+| `agent.compact.level` | L1–L4 触发次数 |
+| `agent.tool.latency` / `error_rate` | 工具 |
+| `agent.resilience.fallback` | 模型降级次数 |
+| `agent.checkpoint.write` | 卡点落盘 |
+| `agent.guardrail.block` | 拦截 |
+| `agent.hitl.escalation` | 人工升级 |
+
+## 认知质量（v3.0）
+
+- 认知热力图：工具/记忆/Compact 消耗分布
+- 证据存活率：Compact 后 `wasReferenced` 比例
+- 影子代理滞后：SessionShadow 队列深度
+
+## 日志
+
+- 结构化 JSON：`traceId`, `runId`, `agentId`, `hook`, `compactLevel`
+- **禁止** 完整 Prompt/工具密钥
+- 级别：DEBUG 推理细节；INFO 步骤；WARN 降级；ERROR 失败
+
+## 评估（`evals/`）
+
+任务成功率、平均步数、工具选择准确率、安全合规率、韧性恢复率（从 Checkpoint 恢复）。
+
+## 优雅停机可观测
+
+`on_shutdown` 阶段指标：`drain_phase`, `checkpoints_written`, `force_shutdown`。
