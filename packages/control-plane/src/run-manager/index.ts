@@ -27,6 +27,7 @@ export type RunEvent =
   | { type: 'recovery_loaded' }
   | { type: 'complete' }
   | { type: 'timeout' }
+  | { type: 'run_failed'; reason?: string }
   | { type: 'recovery_attempt' }
   | { type: 'escalate_human' }
   | { type: 'shutdown_received' }
@@ -97,6 +98,10 @@ export class RunManager {
     return [...this.runs.values()].filter((r) => r.tenantId === tenantId);
   }
 
+  getAll(): readonly AgentRun[] {
+    return [...this.runs.values()];
+  }
+
   getActive(): readonly AgentRun[] {
     return [...this.runs.values()].filter(
       (r) => r.status === 'running' || r.status === 'resuming',
@@ -104,6 +109,12 @@ export class RunManager {
   }
 
   private computeNextStatus(current: AgentRunStatus, event: RunEvent): AgentRunStatus | null {
+    const terminal: readonly AgentRunStatus[] = ['succeeded', 'failed', 'cancelled', 'handed_over'];
+    if (!terminal.includes(current)) {
+      if (event.type === 'shutdown_received') return 'draining';
+      if (event.type === 'user_cancel') return 'cancelled';
+    }
+
     const transitions: Record<string, Partial<Record<string, AgentRunStatus>>> = {
       created: { dispatch: 'running' },
       running: {
@@ -112,6 +123,7 @@ export class RunManager {
         budget_exhausted: 'waiting_budget',
         complete: 'succeeded',
         timeout: 'failed',
+        run_failed: 'failed',
         shutdown_received: 'draining',
         user_cancel: 'cancelled',
       },

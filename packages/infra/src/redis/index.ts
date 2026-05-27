@@ -1,5 +1,7 @@
+import { Redis } from 'ioredis';
+
 /**
- * Redis 客户端管理
+ * Redis 客户端配置
  * 用途：Session 缓存、消息去重、限流令牌桶、BullMQ 后端
  */
 export interface RedisConfig {
@@ -10,41 +12,63 @@ export interface RedisConfig {
   readonly keyPrefix?: string;
 }
 
+/** ioredis 真实客户端 */
 export class RedisClient {
-  private readonly config: RedisConfig;
+  private readonly client: Redis;
 
   constructor(config: RedisConfig) {
-    this.config = config;
+    this.client = new Redis({
+      host: config.host,
+      port: config.port,
+      password: config.password,
+      db: config.db,
+      keyPrefix: config.keyPrefix,
+    });
   }
 
-  getConfig(): RedisConfig {
-    return this.config;
-  }
-
-  /** 消息去重：基于 messageId 的幂等性检查 */
+  /** 消息去重：SETNX 语义，已存在则为重复 */
   async isDuplicate(messageId: string, ttlSeconds: number = 3600): Promise<boolean> {
-    void ttlSeconds;
-    void messageId;
-    return false;
+    const result = await this.client.set(`dedup:${messageId}`, '1', 'EX', ttlSeconds, 'NX');
+    return result !== 'OK';
   }
 
-  /** 限流：令牌桶 */
+  /** 令牌桶限流：窗口内请求数限制 */
   async checkRateLimit(key: string, maxRequests: number, windowMs: number): Promise<boolean> {
-    void key;
-    void maxRequests;
-    void windowMs;
-    return true;
+    const redisKey = `ratelimit:${key}`;
+    const count = await this.client.incr(redisKey);
+    if (count === 1) {
+      await this.client.pexpire(redisKey, windowMs);
+    }
+    return count <= maxRequests;
   }
 
-  /** Session 缓存读写 */
   async getSession<T>(sessionId: string): Promise<T | null> {
-    void sessionId;
-    return null;
+    const raw = await this.client.get(`session:${sessionId}`);
+    return raw ? (JSON.parse(raw) as T) : null;
   }
 
   async setSession<T>(sessionId: string, data: T, ttlMs: number): Promise<void> {
-    void sessionId;
-    void data;
-    void ttlMs;
+    await this.client.set(`session:${sessionId}`, JSON.stringify(data), 'PX', ttlMs);
+  }
+
+  async get<T>(key: string): Promise<T | null> {
+    const raw = await this.client.get(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  }
+
+  async set<T>(key: string, value: T, ttlMs?: number): Promise<void> {
+    if (ttlMs) {
+      await this.client.set(key, JSON.stringify(value), 'PX', ttlMs);
+      return;
+    }
+    await this.client.set(key, JSON.stringify(value));
+  }
+
+  async delete(key: string): Promise<boolean> {
+    return (await this.client.del(key)) > 0;
+  }
+
+  async close(): Promise<void> {
+    this.client.disconnect();
   }
 }

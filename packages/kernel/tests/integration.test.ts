@@ -5,7 +5,6 @@ import type { ToolExecutor } from '../src/query-engine/query-loop.js';
 import type { LLMToolDef } from '../src/query-engine/types.js';
 import { TimeGapMicroCompact } from '../src/compact/time-gap-micro.js';
 import { ResilientLoop } from '../src/query-engine/resilient-loop.js';
-import { ProviderError } from '@nexus/shared';
 
 /**
  * Mock Provider that simulates:
@@ -56,16 +55,20 @@ describe('QueryLoop', () => {
     const toolExecutor = new MockToolExecutor();
     const controller = new AbortController();
 
-    const loop = new QueryLoop(provider, toolExecutor, {
-      maxTurns: 10,
-      maxToolCallsPerTurn: 5,
-      budgetSnapshot: {
-        tokenBudget: { total: 10000, used: 0, remaining: 10000 },
-        costBudget: { total: 1, used: 0, remaining: 1 },
-        timeBudget: { total: 60000, used: 0, remaining: 60000 },
-        stepBudget: { total: 20, used: 0, remaining: 20 },
+    const loop = new QueryLoop({
+      provider,
+      toolExecutor,
+      config: {
+        maxTurns: 10,
+        maxToolCallsPerTurn: 5,
+        budgetSnapshot: {
+          tokenBudget: { total: 10000, used: 0, remaining: 10000 },
+          costBudget: { total: 1, used: 0, remaining: 1 },
+          timeBudget: { total: 60000, used: 0, remaining: 60000 },
+          stepBudget: { total: 20, used: 0, remaining: 20 },
+        },
+        abortSignal: controller.signal,
       },
-      abortSignal: controller.signal,
     });
 
     const messages: LLMMessage[] = [
@@ -91,7 +94,7 @@ describe('QueryLoop', () => {
     if (completed && completed.type === 'completed') {
       expect(completed.result.success).toBe(true);
       expect(completed.result.turnsExecuted).toBe(2);
-      expect(completed.result.toolCallsCount).toBe(0);
+      expect(completed.result.toolCallsCount).toBe(1);
     }
   });
 });

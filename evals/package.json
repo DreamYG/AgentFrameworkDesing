@@ -1,0 +1,20 @@
+{
+  "name": "@nexus/evals",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@nexus/shared": "workspace:*",
+    "@nexus/kernel": "workspace:*",
+    "@nexus/control-plane": "workspace:*",
+    "@nexus/tool-gateway": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

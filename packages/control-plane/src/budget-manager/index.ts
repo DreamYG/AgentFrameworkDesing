@@ -31,6 +31,13 @@ export class BudgetManager {
     this.costUsed += amount;
   }
 
+  refill(params?: Partial<BudgetConfig>): void {
+    if (params?.tokenLimit) this.tokenUsed = Math.max(0, this.tokenUsed - params.tokenLimit);
+    if (params?.costLimitUsd) this.costUsed = Math.max(0, this.costUsed - params.costLimitUsd);
+    if (params?.timeLimitMs) this.timeUsed = Math.max(0, this.timeUsed - params.timeLimitMs);
+    if (params?.stepLimit) this.stepsUsed = Math.max(0, this.stepsUsed - params.stepLimit);
+  }
+
   recordStep(): void {
     this.stepsUsed++;
   }

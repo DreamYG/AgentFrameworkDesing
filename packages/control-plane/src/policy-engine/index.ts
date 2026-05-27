@@ -55,7 +55,7 @@ export class PolicyEngine {
 
   private isToolAllowedForAgent(agentId: string, toolName: string): boolean {
     const allowed = this.agentAllowedTools.get(agentId);
-    if (!allowed) return true;
+    if (!allowed) return false;
     return allowed.includes(toolName);
   }
 

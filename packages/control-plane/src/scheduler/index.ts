@@ -26,6 +26,7 @@ export interface SchedulerConfig {
 export class Scheduler {
   private readonly queue: ScheduledTask[] = [];
   private readonly active = new Map<string, number>(); // tenantId -> active count
+  private readonly dispatched = new Map<string, ScheduledTask>();
 
   constructor(private readonly config: SchedulerConfig) {}
 
@@ -46,6 +47,7 @@ export class Scheduler {
       task.scheduledAt = new Date();
       this.incrementActive(task.tenantId);
       this.queue.splice(i, 1);
+      this.dispatched.set(task.runId, task);
       return task;
     }
     return null;
@@ -53,8 +55,9 @@ export class Scheduler {
 
   complete(runId: string, tenantId: string): void {
     this.decrementActive(tenantId);
-    const task = this.queue.find((t) => t.runId === runId);
+    const task = this.dispatched.get(runId);
     if (task) task.status = 'completed';
+    this.dispatched.delete(runId);
   }
 
   cancel(runId: string, tenantId: string): void {
@@ -64,6 +67,9 @@ export class Scheduler {
       this.queue.splice(idx, 1);
     } else {
       this.decrementActive(tenantId);
+      const task = this.dispatched.get(runId);
+      if (task) task.status = 'cancelled';
+      this.dispatched.delete(runId);
     }
   }
 

@@ -1,4 +1,6 @@
 export * from './agents/index.js';
+export * from './agents/prompts.js';
+export * from './bootstrap.js';
 
 /** Phase 1 能力包 Manifest（代码形式，可转为 YAML） */
 export const PHASE_INTENT_MANIFEST = {

@@ -1,4 +1,5 @@
 import type { PhaseId, ToolRiskLevel } from '@nexus/shared';
+export * from './manifest.js';
 
 /** Agent 定义 — 注册中心管理的核心实体 */
 export interface AgentDefinition {

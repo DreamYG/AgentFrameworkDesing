@@ -13,6 +13,7 @@ export interface ApprovalRequest {
   readonly approvers: readonly string[];
   readonly requiredApprovals: number;
   readonly deadline: Date;
+  readonly approvedBy: readonly string[];
   status: ApprovalStatus;
   readonly createdAt: Date;
   decidedAt?: Date;
@@ -28,6 +29,7 @@ export class ApprovalEngine {
   private readonly requests = new Map<string, ApprovalRequest>();
   private onApproved?: (request: ApprovalRequest) => void;
   private onDenied?: (request: ApprovalRequest) => void;
+  private onTimedOut?: (request: ApprovalRequest) => void;
 
   onApproval(handler: (request: ApprovalRequest) => void): void {
     this.onApproved = handler;
@@ -35,6 +37,10 @@ export class ApprovalEngine {
 
   onDenial(handler: (request: ApprovalRequest) => void): void {
     this.onDenied = handler;
+  }
+
+  onTimeout(handler: (request: ApprovalRequest) => void): void {
+    this.onTimedOut = handler;
   }
 
   shouldRequireApproval(riskLevel: ToolRiskLevel, policy: 'auto' | 'standard' | 'strict'): boolean {
@@ -64,6 +70,7 @@ export class ApprovalEngine {
       approvers: params.approvers,
       requiredApprovals: params.riskLevel === 'R4' ? 2 : 1,
       deadline: new Date(Date.now() + params.timeoutMs),
+      approvedBy: [],
       status: 'pending',
       createdAt: new Date(),
     };
@@ -74,9 +81,17 @@ export class ApprovalEngine {
   approve(requestId: string, approver: string): void {
     const request = this.requests.get(requestId);
     if (!request || request.status !== 'pending') return;
+    if (!request.approvers.includes(approver)) return;
+
+    const approvedBy = new Set(request.approvedBy);
+    approvedBy.add(approver);
+    (request as { approvedBy: readonly string[] }).approvedBy = [...approvedBy];
+    request.decidedBy = approver;
+
+    if (approvedBy.size < request.requiredApprovals) return;
+
     request.status = 'approved';
     request.decidedAt = new Date();
-    request.decidedBy = approver;
     this.onApproved?.(request);
   }
 
@@ -94,6 +109,8 @@ export class ApprovalEngine {
     if (!request || request.status !== 'pending') return false;
     if (new Date() > request.deadline) {
       request.status = 'timeout';
+      request.decidedAt = new Date();
+      this.onTimedOut?.(request);
       return true;
     }
     return false;
@@ -107,5 +124,23 @@ export class ApprovalEngine {
     return [...this.requests.values()].filter(
       (r) => r.runId === runId && r.status === 'pending',
     );
+  }
+
+  getPending(): readonly ApprovalRequest[] {
+    return [...this.requests.values()].filter((request) => request.status === 'pending');
+  }
+
+  getAll(): readonly ApprovalRequest[] {
+    return [...this.requests.values()];
+  }
+
+  checkAllTimeouts(): readonly ApprovalRequest[] {
+    const timedOut: ApprovalRequest[] = [];
+    for (const request of this.requests.values()) {
+      if (this.checkTimeout(request.id)) {
+        timedOut.push(request);
+      }
+    }
+    return timedOut;
   }
 }

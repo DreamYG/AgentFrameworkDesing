@@ -32,13 +32,15 @@ export type Unsubscribe = () => void;
 export class InMemoryPhaseBridge implements IPhaseBridge {
   private readonly handlers = new Map<string, Set<(event: PhaseBridgeEvent) => Promise<void>>>();
   private readonly phaseHandlers = new Map<PhaseId, Set<(event: PhaseBridgeEvent) => Promise<void>>>();
-  private readonly processedKeys = new Set<string>();
+  private readonly processedKeys = new Map<string, number>();
+  private readonly idempotencyTtlMs = 60 * 60 * 1000;
 
   async publish<T>(event: PhaseBridgeEvent<T>): Promise<void> {
+    this.evictProcessedKeys();
     if (this.processedKeys.has(event.idempotencyKey)) {
       return;
     }
-    this.processedKeys.add(event.idempotencyKey);
+    this.processedKeys.set(event.idempotencyKey, Date.now() + this.idempotencyTtlMs);
 
     const typeHandlers = this.handlers.get(event.type);
     if (typeHandlers) {
@@ -105,5 +107,12 @@ export class InMemoryPhaseBridge implements IPhaseBridge {
     this.handlers.clear();
     this.phaseHandlers.clear();
     this.processedKeys.clear();
+  }
+
+  private evictProcessedKeys(): void {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.processedKeys) {
+      if (expiresAt <= now) this.processedKeys.delete(key);
+    }
   }
 }

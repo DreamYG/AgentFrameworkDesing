@@ -1,41 +1,30 @@
-/**
- * Metrics 收集骨架
- * MVP: 计数器和直方图
- */
-export interface MetricPoint {
-  readonly name: string;
-  readonly value: number;
-  readonly labels: Record<string, string>;
-  readonly timestamp: Date;
-}
+import { metrics, type Counter, type Histogram, type Meter } from '@opentelemetry/api';
+import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 
-export class MetricsCollector {
-  private readonly counters = new Map<string, number>();
-  private readonly histograms = new Map<string, number[]>();
+/** OpenTelemetry Metrics + Prometheus exporter */
+export class OpenTelemetryMetrics {
+  readonly exporter: PrometheusExporter;
+  private readonly meter: Meter;
+  private readonly counters = new Map<string, Counter>();
+  private readonly histograms = new Map<string, Histogram>();
 
-  increment(name: string, labels?: Record<string, string>, value = 1): void {
-    const key = this.makeKey(name, labels);
-    this.counters.set(key, (this.counters.get(key) ?? 0) + value);
+  constructor(options?: { port?: number; endpoint?: string }) {
+    this.exporter = new PrometheusExporter({
+      port: options?.port ?? 9464,
+      endpoint: options?.endpoint ?? '/metrics',
+    });
+    this.meter = metrics.getMeter('nexus');
   }
 
-  observe(name: string, value: number, labels?: Record<string, string>): void {
-    const key = this.makeKey(name, labels);
-    const values = this.histograms.get(key) ?? [];
-    values.push(value);
-    this.histograms.set(key, values);
+  increment(name: string, value = 1, attributes?: Record<string, string | number | boolean>): void {
+    const counter = this.counters.get(name) ?? this.meter.createCounter(name);
+    this.counters.set(name, counter);
+    counter.add(value, attributes);
   }
 
-  getCounter(name: string, labels?: Record<string, string>): number {
-    return this.counters.get(this.makeKey(name, labels)) ?? 0;
-  }
-
-  getHistogram(name: string, labels?: Record<string, string>): readonly number[] {
-    return this.histograms.get(this.makeKey(name, labels)) ?? [];
-  }
-
-  private makeKey(name: string, labels?: Record<string, string>): string {
-    if (!labels) return name;
-    const sorted = Object.entries(labels).sort(([a], [b]) => a.localeCompare(b));
-    return `${name}{${sorted.map(([k, v]) => `${k}="${v}"`).join(',')}}`;
+  observe(name: string, value: number, attributes?: Record<string, string | number | boolean>): void {
+    const histogram = this.histograms.get(name) ?? this.meter.createHistogram(name);
+    this.histograms.set(name, histogram);
+    histogram.record(value, attributes);
   }
 }

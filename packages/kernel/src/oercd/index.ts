@@ -115,3 +115,26 @@ export class OERCDEngine {
     return this.traces.get(runId);
   }
 }
+
+/** Phase C 的 Phase 1 Noop 实现，后续阶段只填充生成逻辑。 */
+export class NoopCrystallizePhase implements ICrystallizePhase {
+  async crystallize(ctx: OERCDContext, reflection: ReflectResult): Promise<CrystallizeResult> {
+    return {
+      skillId: `noop-skill-${ctx.runId}`,
+      content: JSON.stringify({ reflection }),
+      evidenceIds: [],
+      status: 'pending_review',
+    };
+  }
+}
+
+/** Phase D 的 Phase 1 Noop 实现，保持接口可注入。 */
+export class NoopDistributePhase implements IDistributePhase {
+  async distribute(skill: CrystallizeResult, scope: DistributeScope): Promise<DistributeResult> {
+    return {
+      distributionId: `noop-distribution-${skill.skillId}-${scope}`,
+      targetAgents: [],
+      requiresReview: true,
+    };
+  }
+}

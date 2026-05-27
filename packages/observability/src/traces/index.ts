@@ -1,44 +1,45 @@
-/**
- * OpenTelemetry 链路追踪骨架
- * MVP: 提供 span 创建和上下文传播的抽象
- */
-export interface TraceSpan {
-  readonly traceId: string;
-  readonly spanId: string;
-  readonly name: string;
-  readonly startTime: Date;
-  endTime?: Date;
-  readonly attributes: Record<string, string | number | boolean>;
-  readonly events: readonly SpanEvent[];
-}
+import { context, trace, type Span, SpanStatusCode } from '@opentelemetry/api';
+import { NodeSDK } from '@opentelemetry/sdk-node';
 
-export interface SpanEvent {
-  readonly name: string;
-  readonly timestamp: Date;
-  readonly attributes?: Record<string, string | number | boolean>;
-}
+/** OpenTelemetry SDK 管理器：负责 SDK 启停、span 创建与上下文传播 */
+export class OpenTelemetryManager {
+  private sdk: NodeSDK | null = null;
 
-export class Tracer {
-  private readonly spans: TraceSpan[] = [];
+  start(serviceName: string): void {
+    this.sdk = new NodeSDK({ serviceName });
+    this.sdk.start();
+  }
 
-  startSpan(name: string, attributes?: Record<string, string | number | boolean>): TraceSpan {
-    const span: TraceSpan = {
-      traceId: crypto.randomUUID(),
-      spanId: crypto.randomUUID(),
-      name,
-      startTime: new Date(),
-      attributes: attributes ?? {},
-      events: [],
-    };
-    this.spans.push(span);
+  async shutdown(): Promise<void> {
+    await this.sdk?.shutdown();
+  }
+
+  startSpan(name: string, attributes?: Record<string, string | number | boolean>): Span {
+    const span = trace.getTracer('nexus').startSpan(name);
+    for (const [key, value] of Object.entries(attributes ?? {})) {
+      span.setAttribute(key, value);
+    }
     return span;
   }
 
-  endSpan(span: TraceSpan): void {
-    span.endTime = new Date();
-  }
-
-  getSpans(): readonly TraceSpan[] {
-    return this.spans;
+  async withSpan<T>(
+    name: string,
+    attributes: Record<string, string | number | boolean>,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const span = this.startSpan(name, attributes);
+    return context.with(trace.setSpan(context.active(), span), async () => {
+      try {
+        const result = await fn();
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (error) {
+        span.recordException(error as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   }
 }

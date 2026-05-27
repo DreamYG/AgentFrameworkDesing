@@ -48,3 +48,15 @@ export class OutputSanitizer {
     return result;
   }
 }
+
+export type DataClassification = 'public' | 'internal' | 'confidential' | 'top_secret';
+
+/** 数据分级启发式分类器。 */
+export class DataClassifier {
+  classify(input: string): DataClassification {
+    if (/password|secret|token|private key/i.test(input)) return 'top_secret';
+    if (/\b\d{15,19}\b|身份证|薪资|合同/i.test(input)) return 'confidential';
+    if (/internal|内部|项目|客户/i.test(input)) return 'internal';
+    return 'public';
+  }
+}

@@ -134,7 +134,7 @@ describe('PolicyEngine', () => {
     expect(decision).toBe('deny');
   });
 
-  it('should require approval for R2+ by default', () => {
+  it('should deny unregistered agent tools by default', () => {
     const policy = new PolicyEngine();
     const decision = policy.evaluate({
       userId: 'user-1',
@@ -143,7 +143,7 @@ describe('PolicyEngine', () => {
       toolName: 'task.assign',
       toolRiskLevel: 'R2',
     });
-    expect(decision).toBe('require_approval');
+    expect(decision).toBe('deny');
   });
 });
 
