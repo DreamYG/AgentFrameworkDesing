@@ -5,11 +5,15 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "rimraf": "^6.0.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }

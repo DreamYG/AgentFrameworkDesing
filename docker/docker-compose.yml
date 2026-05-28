@@ -1,4 +1,51 @@
 services:
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: nexus-api-gateway:local
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgres://nexus:nexus@postgres:5432/nexus
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      NEXUS_LOG_MODE: ${NEXUS_LOG_MODE:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      NEXUS_TENANT_ID: ${NEXUS_TENANT_ID:-default}
+      NEXUS_MODEL: ${NEXUS_MODEL:-local-phase1-mvp}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  console:
+    image: nexus-api-gateway:local
+    command: ["node", "apps/console/dist/server.js"]
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      NEXUS_GATEWAY_URL: ${NEXUS_GATEWAY_URL:-http://localhost:3000}
+    ports:
+      - "3001:3001"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   postgres:
     image: postgres:16-alpine
     environment:

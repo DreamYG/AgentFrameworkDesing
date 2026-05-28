@@ -44,18 +44,27 @@ importers:
       '@nexus/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
+      '@nexus/guardrails':
+        specifier: workspace:*
+        version: link:../../packages/guardrails
       '@nexus/infra':
         specifier: workspace:*
         version: link:../../packages/infra
       '@nexus/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@nexus/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@nexus/observability':
         specifier: workspace:*
         version: link:../../packages/observability
       '@nexus/phase-intent':
         specifier: workspace:*
         version: link:../../packages/phase-intent
+      '@nexus/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@nexus/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -81,6 +90,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@nexus/infra':
+        specifier: workspace:*
+        version: link:../../packages/infra
       '@nexus/memory':
         specifier: workspace:*
         version: link:../../packages/memory
@@ -100,12 +112,18 @@ importers:
 
   apps/console:
     devDependencies:
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
       rimraf:
         specifier: ^6.0.0
         version: 6.1.3
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@25.9.1)
 
   evals:
     dependencies:
@@ -131,6 +149,9 @@ importers:
 
   mcp-servers/_template:
     devDependencies:
+      '@types/node':
+        specifier: ^25.0.0
+        version: 25.9.1
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -202,6 +223,9 @@ importers:
       postgres:
         specifier: ^3.4.0
         version: 3.4.9
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -244,6 +268,9 @@ importers:
         specifier: workspace:*
         version: link:../shared
     devDependencies:
+      '@types/node':
+        specifier: ^25.0.0
+        version: 25.9.1
       rimraf:
         specifier: ^6.0.0
         version: 6.1.3
