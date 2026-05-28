@@ -43,7 +43,15 @@ export class StateGraphEngine<TState = Record<string, unknown>> {
   }
 
   async execute(entryNodeId: string, initialState: TState, context: Omit<NodeContext, 'nodeId'>): Promise<NodeResult<TState>> {
-    let currentNodeId = entryNodeId;
+    return this.runFrom(entryNodeId, initialState, context);
+  }
+
+  async resume(nodeId: string, state: TState, context: Omit<NodeContext, 'nodeId'>): Promise<NodeResult<TState>> {
+    return this.runFrom(nodeId, state, context);
+  }
+
+  private async runFrom(nodeId: string, initialState: TState, context: Omit<NodeContext, 'nodeId'>): Promise<NodeResult<TState>> {
+    let currentNodeId = nodeId;
     let state = initialState;
 
     while (true) {

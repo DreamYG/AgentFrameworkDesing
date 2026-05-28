@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SessionShadow, type RedisLikeSessionStore, type SessionSummary } from '../src/session-shadow.js';
+import { SessionShadow, type ISessionSummaryPersister, type RedisLikeSessionStore, type SessionSummary } from '../src/session-shadow.js';
 
 function makeStore(): RedisLikeSessionStore & { snapshot(): Record<string, SessionSummary> } {
   const data = new Map<string, SessionSummary>();
@@ -75,5 +75,39 @@ describe('SessionShadow', () => {
 
     const result = await shadow.update('run-2', { turnIndex: 6, progress: 'late update' });
     expect(result.progressSummary).toContain('late update');
+  });
+
+  it('mirrors updates to the PG persister and falls back to it on Redis miss', async () => {
+    const pg = new Map<string, SessionSummary>();
+    const persister: ISessionSummaryPersister = {
+      async upsert(input) {
+        pg.set(input.runId, {
+          version: input.version,
+          turnRange: [input.turnStart, input.turnEnd],
+          progressSummary: input.progressSummary,
+          confirmedDecisions: input.confirmedDecisions,
+          openQuestions: input.openQuestions,
+          activeEvidenceIds: input.activeEvidenceIds,
+          tokenCount: input.tokenCount,
+        });
+      },
+      async get(runId) {
+        return pg.get(runId) ?? null;
+      },
+    };
+
+    const store = makeStore();
+    const shadow = new SessionShadow(store, { persister, tenantId: 'tenant-A' });
+    await shadow.update('run-pg', { turnIndex: 1, progress: 'first' });
+    // Allow fire-and-forget persistence to settle
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pg.get('run-pg')?.progressSummary).toContain('first');
+
+    const coldStore = makeStore();
+    const coldShadow = new SessionShadow(coldStore, { persister, tenantId: 'tenant-A' });
+    const fallback = await coldShadow.get('run-pg');
+    expect(fallback?.progressSummary).toContain('first');
+    // After fallback, Redis cache should be warmed
+    expect(coldStore.snapshot()['session_summary:run-pg']?.progressSummary).toContain('first');
   });
 });

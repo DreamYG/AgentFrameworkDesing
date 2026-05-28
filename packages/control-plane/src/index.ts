@@ -11,3 +11,6 @@ export * from './model-router/index.js';
 export * from './context-policy/index.js';
 export * from './orchestrator/index.js';
 export * from './sunset-engine/index.js';
+export * from './feature-flag/index.js';
+export * from './trust-engine/index.js';
+export * from './decision-recorder/index.js';

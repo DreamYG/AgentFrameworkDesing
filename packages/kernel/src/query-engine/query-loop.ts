@@ -14,11 +14,19 @@ import type { HookRegistry } from '../lifecycle/hook-registry.js';
 import type { CheckpointManager } from '../checkpoint/checkpoint-manager.js';
 import type { CheckpointReason } from '../checkpoint/types.js';
 import { CompactEngine } from '../compact/compact-engine.js';
+import type { IEvidencePersister } from '../compact/evidence-registry.js';
 import type { LLMMessageRef } from '../compact/types.js';
 
 export interface ToolExecutor {
   execute(toolName: string, args: string, runId: string): Promise<ToolResult>;
   getToolDefs(): readonly LLMToolDef[];
+}
+
+export interface CompactRuntimeOptions {
+  readonly compactModel?: string;
+  readonly keepRecentTurns?: number;
+  readonly evidencePersister?: IEvidencePersister;
+  readonly maxEvidence?: number;
 }
 
 export interface QueryLoopDeps {
@@ -31,6 +39,7 @@ export interface QueryLoopDeps {
   readonly config: QueryLoopConfig;
   readonly tenantId?: string;
   readonly agentId?: string;
+  readonly compactOptions?: CompactRuntimeOptions;
 }
 
 /**
@@ -43,7 +52,7 @@ export class QueryLoop {
   private totalToolCalls = 0;
   private totalTokensUsed = 0;
   private readonly resilientLoop: ResilientLoop;
-  private readonly compact: CompactEngine;
+  private compact!: CompactEngine;
   private readonly hooks?: HookRegistry;
   private readonly checkpoint?: CheckpointManager;
   private readonly sessionSummaryProvider?: (runId: string) => Promise<string | null>;
@@ -51,6 +60,8 @@ export class QueryLoop {
   private readonly config: QueryLoopConfig;
   private readonly tenantId: string;
   private readonly agentId: string;
+  private readonly compactProvider?: ILLMProvider;
+  private readonly compactOptions?: CompactRuntimeOptions;
 
   constructor(deps: QueryLoopDeps) {
     this.toolExecutor = deps.toolExecutor;
@@ -61,11 +72,21 @@ export class QueryLoop {
     this.tenantId = deps.tenantId ?? 'default';
     this.agentId = deps.agentId ?? '';
     this.resilientLoop = new ResilientLoop(deps.provider, deps.fallbackProvider);
-    this.compact = new CompactEngine({ provider: deps.fallbackProvider ?? deps.provider });
+    this.compactProvider = deps.fallbackProvider ?? deps.provider;
+    this.compactOptions = deps.compactOptions;
   }
 
   async *run(messages: LLMMessage[], model: string, runId?: string): AsyncGenerator<AgentStreamEvent> {
     const effectiveRunId = runId ?? crypto.randomUUID();
+    this.compact = new CompactEngine({
+      provider: this.compactProvider,
+      compactModel: this.compactOptions?.compactModel,
+      keepRecentTurns: this.compactOptions?.keepRecentTurns,
+      maxEvidence: this.compactOptions?.maxEvidence,
+      evidencePersister: this.compactOptions?.evidencePersister,
+      runId: effectiveRunId,
+      tenantId: this.tenantId,
+    });
 
     await this.hooks?.dispatch('pre_plan', {
       runId: effectiveRunId, tenantId: this.tenantId, agentId: this.agentId, turnIndex: 0, phase: 'pre_plan',
@@ -130,7 +151,10 @@ export class QueryLoop {
       }
 
       if (this.checkpoint?.shouldCheckpoint('periodic_interval')) {
-        yield { type: 'checkpoint', checkpointId: crypto.randomUUID(), turnCount: this.turnIndex, runId: effectiveRunId };
+        const checkpointEvent = await this.saveCheckpoint('periodic_interval', effectiveRunId, messages, { skipShouldCheck: true });
+        if (checkpointEvent) {
+          yield checkpointEvent;
+        }
         await this.hooks?.dispatch('on_checkpoint', {
           runId: effectiveRunId, tenantId: this.tenantId, agentId: this.agentId, turnIndex: this.turnIndex, phase: 'on_checkpoint',
         });
@@ -321,8 +345,9 @@ export class QueryLoop {
     reason: CheckpointReason,
     runId: string,
     messages: readonly LLMMessage[],
+    options?: { skipShouldCheck?: boolean },
   ): Promise<AgentStreamEvent | null> {
-    if (!this.checkpoint?.shouldCheckpoint(reason)) {
+    if (!this.checkpoint || (!options?.skipShouldCheck && !this.checkpoint.shouldCheckpoint(reason))) {
       return null;
     }
 

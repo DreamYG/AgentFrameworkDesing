@@ -4,10 +4,14 @@ version: 0.1.0
 level: 4
 type: agent
 phase: intent
-description: 项目管理意图层能力包：需求分析、任务拆解、进度追踪、催办
+description: 意图层能力包：通用 AI 助手 + 项目管理专家 Agents
 author: Nexus Core
 kernelCompatibility: ">=0.0.1"
 provisions:
+  - type: agent
+    id: general-assistant
+    description: 通用 AI 助手（对话/检索/文档/数据/生图）
+    exports: []
   - type: agent
     id: requirement-analyst
     description: 需求分析
@@ -32,6 +36,71 @@ provisions:
     id: estimation
     description: 工时估算
     exports: []
+  - type: tool
+    id: task.decompose
+    description: WBS 任务拆解
+    exports: []
+  - type: tool
+    id: task.assign
+    description: 任务负责人分配
+    exports: []
+  - type: tool
+    id: notification.send
+    description: 智能催办通知
+    exports: []
+  - type: tool
+    id: ai.chat
+    description: 通用对话
+    exports: []
+  - type: tool
+    id: ai.web.search
+    description: 联网搜索
+    exports: []
+  - type: tool
+    id: ai.document.summarize
+    description: 文档摘要
+    exports: []
+  - type: tool
+    id: ai.document.extract
+    description: 文档结构化抽取
+    exports: []
+  - type: tool
+    id: ai.document.qa
+    description: 文档问答
+    exports: []
+  - type: tool
+    id: ai.data.transform
+    description: 数据转换
+    exports: []
+  - type: tool
+    id: ai.skill.search
+    description: 本地技能/经验检索
+    exports: []
+  - type: tool
+    id: ai.image.generate
+    description: 图像生成
+    exports: []
+  - type: tool
+    id: ai.agent.invoke
+    description: 子 Agent 委派（多 Agent 协作）
+    exports: []
+  - type: policy
+    id: phase-intent-r2-approval
+    description: R2 工具调用进入审批策略
+    exports: []
+skills:
+  - id: pm-requirement-analysis
+    description: 项目需求分析与澄清
+    evidenceRequired: true
+policies:
+  maxRiskLevel: R2
+  approvalPolicy: standard
+events:
+  publishes:
+    - task.created
+    - task.assigned_to_ai
+    - notification.requested
+  subscribes: []
 requirements: []
 lifecycle: {}
 healthCheck: /health

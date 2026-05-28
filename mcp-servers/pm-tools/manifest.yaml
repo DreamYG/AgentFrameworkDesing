@@ -1,0 +1,25 @@
+id: nexus-pm-tools
+name: Nexus PM Tools
+version: 0.1.0
+level: 4
+type: connector
+phase: intent
+description: Project management tools for Phase 1 validation
+author: Nexus Core
+kernelCompatibility: ">=0.0.1"
+provisions:
+  - type: tool
+    id: task.decompose
+    description: Decompose requirements into WBS tasks
+    exports: []
+  - type: tool
+    id: task.assign
+    description: Assign project tasks
+    exports: []
+  - type: tool
+    id: notification.send
+    description: Send PM notifications
+    exports: []
+requirements: []
+lifecycle: {}
+healthCheck: /health

@@ -1,0 +1,16 @@
+id: nexus-mcp-template
+name: Nexus MCP Template
+version: 0.0.1
+level: 4
+type: connector
+description: Template MCP server with HTTP discovery and health check
+author: Nexus Core
+kernelCompatibility: ">=0.0.1"
+provisions:
+  - type: tool
+    id: demo.echo
+    description: Echo input payload
+    exports: []
+requirements: []
+lifecycle: {}
+healthCheck: /health

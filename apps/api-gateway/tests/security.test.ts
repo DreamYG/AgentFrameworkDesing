@@ -4,7 +4,7 @@ import { GatewayServer } from '../src/server.js';
 import { MessageRouter } from '../src/middleware/message-router.js';
 
 function buildGateway(hmacSecret?: string): GatewayServer {
-  return new GatewayServer({ port: 0, wsPort: 0, corsOrigins: [], hmacSecret });
+  return new GatewayServer({ port: 0, corsOrigins: [], hmacSecret });
 }
 
 describe('GatewayServer HMAC', () => {

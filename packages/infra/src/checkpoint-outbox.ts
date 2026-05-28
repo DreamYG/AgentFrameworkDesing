@@ -1,4 +1,4 @@
-import type { PersistedCheckpointSnapshot, CheckpointsRepository } from './database/repositories.js';
+import type { PersistedCheckpointSnapshot, CheckpointsRepository } from './database/repositories/index.js';
 import type { QueueManager } from './queue/index.js';
 
 /** Durable Checkpoint Outbox */
@@ -10,7 +10,7 @@ export class CheckpointOutbox {
 
   async enqueue(snapshot: PersistedCheckpointSnapshot): Promise<string> {
     return this.queue.addJob('checkpoint-outbox', {
-      tenantId: 'default',
+      tenantId: snapshot.tenantId,
       type: 'checkpoint.save',
       data: { snapshot: snapshot as unknown as Record<string, unknown> },
     });

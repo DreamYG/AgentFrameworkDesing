@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+
 /**
  * PM Tools MCP Server — nexus-pm-tools
  * 完整工具 handler 实现（操作内存数据库）
@@ -211,6 +213,10 @@ export const PM_TOOLS: readonly PMTool[] = [
 ];
 
 if (process.argv[1]?.endsWith('index.js')) {
+  const httpPort = process.env['MCP_HTTP_PORT'];
+  if (httpPort) {
+    startHttpServer(Number(httpPort));
+  }
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk: string) => {
     for (const line of chunk.split('\n').filter(Boolean)) {
@@ -219,5 +225,61 @@ if (process.argv[1]?.endsWith('index.js')) {
       const result = handler ? handler(request.params ?? {}) : { error: `Unknown tool: ${request.method}` };
       process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
     }
+  });
+}
+
+function startHttpServer(port: number): void {
+  const server = createServer((req, res) => {
+    void (async () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.method === 'GET' && req.url === '/health') {
+        res.end(JSON.stringify({ healthy: true, name: 'nexus-pm-tools' }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/tools') {
+        res.end(JSON.stringify(PM_TOOLS));
+        return;
+      }
+      const match = req.url?.match(/^\/tools\/([^/]+)\/call$/);
+      if (req.method === 'POST' && match?.[1]) {
+        const toolName = decodeURIComponent(match[1]);
+        const raw = await readBody(req);
+        const parsed = raw ? JSON.parse(raw) as { params?: Record<string, unknown> } : {};
+        const handler = PM_TOOL_HANDLERS[toolName];
+        if (!handler) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ success: false, error: `Unknown tool: ${toolName}`, durationMs: 0 }));
+          return;
+        }
+        const started = Date.now();
+        const data = handler(parsed.params ?? {});
+        const isError = typeof data === 'object' && data !== null && 'error' in data;
+        res.end(JSON.stringify({
+          success: !isError,
+          data: isError ? undefined : data,
+          error: isError ? String((data as { error: unknown }).error) : undefined,
+          durationMs: Date.now() - started,
+        }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'Not found' }));
+    })().catch((error: unknown) => {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    });
+  });
+  server.listen(port, () => {
+    process.stderr.write(`nexus-pm-tools listening on ${port}\n`);
+  });
+}
+
+function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk: string) => { body += chunk; });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
   });
 }

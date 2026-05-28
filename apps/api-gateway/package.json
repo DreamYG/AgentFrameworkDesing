@@ -17,8 +17,11 @@
     "@nexus/control-plane": "workspace:*",
     "@nexus/tool-gateway": "workspace:*",
     "@nexus/kernel": "workspace:*",
+    "@nexus/memory": "workspace:*",
     "@nexus/observability": "workspace:*",
     "@nexus/phase-intent": "workspace:*",
+    "@nexus/providers": "workspace:*",
+    "@nexus/guardrails": "workspace:*",
     "fastify": "^5.0.0",
     "@fastify/websocket": "^11.0.0",
     "@fastify/cors": "^10.0.0"

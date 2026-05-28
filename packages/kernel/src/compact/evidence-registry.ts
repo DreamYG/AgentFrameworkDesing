@@ -16,6 +16,13 @@ export interface EvidenceEntry {
   wasReferenced: boolean;
 }
 
+/** 证据持久化端口（可选）：bootstrap 注入 Postgres / 其他存储 */
+export interface IEvidencePersister {
+  upsert(entry: EvidenceEntry & { runId: string; tenantId: string }): Promise<void>;
+  delete(id: string): Promise<void>;
+  listByRun(runId: string): Promise<readonly EvidenceEntry[]>;
+}
+
 const EVIDENCE_PATTERNS = {
   file_path: /(?:\/[\w.-]+)+\.\w+|[A-Z]:\\(?:[\w.-]+\\)*[\w.-]+/g,
   url: /https?:\/\/[^\s<>"]+/g,
@@ -23,14 +30,37 @@ const EVIDENCE_PATTERNS = {
   error_trace: /(?:Error:|at\s+|Traceback|Exception)/,
 };
 
+export interface EvidenceRegistryOptions {
+  readonly maxEntries?: number;
+  readonly ttlTurns?: number;
+  /** 可选持久化端口；提供后 scanAndRegister/evict 异步写后端 */
+  readonly persister?: IEvidencePersister;
+  /** 持久化时附带的 runId/tenantId */
+  readonly runId?: string;
+  readonly tenantId?: string;
+}
+
 export class EvidenceRegistry {
   private readonly entries = new Map<string, EvidenceEntry>();
   private readonly maxEntries: number;
   private readonly ttlTurns: number;
+  private readonly persister?: IEvidencePersister;
+  private readonly runId?: string;
+  private readonly tenantId?: string;
 
-  constructor(options?: { maxEntries?: number; ttlTurns?: number }) {
+  constructor(options?: EvidenceRegistryOptions) {
     this.maxEntries = options?.maxEntries ?? 50;
     this.ttlTurns = options?.ttlTurns ?? 20;
+    this.persister = options?.persister;
+    this.runId = options?.runId;
+    this.tenantId = options?.tenantId;
+  }
+
+  /** 从持久化层恢复（resume 场景） */
+  async loadFromPersister(runId: string): Promise<void> {
+    if (!this.persister) return;
+    const entries = await this.persister.listByRun(runId);
+    for (const entry of entries) this.entries.set(entry.id, { ...entry });
   }
 
   /**
@@ -65,6 +95,9 @@ export class EvidenceRegistry {
         };
         this.entries.set(entry.id, entry);
         found.push(entry);
+        if (this.persister && this.runId && this.tenantId) {
+          void this.persister.upsert({ ...entry, runId: this.runId, tenantId: this.tenantId });
+        }
       }
     }
 
@@ -100,6 +133,7 @@ export class EvidenceRegistry {
       const age = currentTurn - entry.turnCreated;
       if (age > this.ttlTurns && entry.accessCount === 0 && !entry.wasReferenced) {
         this.entries.delete(id);
+        if (this.persister) void this.persister.delete(id);
         evicted++;
       }
     }
@@ -114,6 +148,7 @@ export class EvidenceRegistry {
     while (this.entries.size > this.maxEntries && sorted.length > 0) {
       const [id] = sorted.shift()!;
       this.entries.delete(id);
+      if (this.persister) void this.persister.delete(id);
     }
   }
 

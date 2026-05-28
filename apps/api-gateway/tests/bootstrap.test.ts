@@ -52,7 +52,7 @@ class MockToolExecutor implements ToolExecutor {
 describe('Bootstrap integration', () => {
   it('wires gateway → orchestrator → runtime → query loop → audit', async () => {
     const app = createNexusApp({
-      gatewayConfig: { port: 0, wsPort: 0, corsOrigins: [] },
+      gatewayConfig: { port: 0, corsOrigins: [] },
       provider: new MockProvider(),
       toolExecutor: new MockToolExecutor(),
       defaultModel: 'mock-model',
@@ -88,7 +88,7 @@ describe('Bootstrap integration', () => {
 
   it('publishes stream events through broker for ws subscribers', async () => {
     const app = createNexusApp({
-      gatewayConfig: { port: 0, wsPort: 0, corsOrigins: [] },
+      gatewayConfig: { port: 0, corsOrigins: [] },
       provider: new MockProvider(),
       toolExecutor: new MockToolExecutor(),
       defaultModel: 'mock-model',

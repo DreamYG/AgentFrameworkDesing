@@ -3,8 +3,22 @@ import { TimeGapMicroCompact } from './time-gap-micro.js';
 import { EvidenceAwareCompact } from './evidence-aware.js';
 import { SessionGraftCompact } from './session-graft.js';
 import { LegacyFullCompact } from './legacy-compact.js';
-import { EvidenceRegistry } from './evidence-registry.js';
+import { EvidenceRegistry, type IEvidencePersister } from './evidence-registry.js';
 import type { ILLMProvider } from '@nexus/shared';
+
+export interface CompactEngineOptions {
+  readonly provider?: ILLMProvider;
+  readonly maxEvidence?: number;
+  /** L4 LLM 压缩使用的模型，未提供时回退到 `legacy-compact` 默认 */
+  readonly compactModel?: string;
+  /** L3 嫁接保留的最近轮数 */
+  readonly keepRecentTurns?: number;
+  /** 证据持久化端口（生产模式注入） */
+  readonly evidencePersister?: IEvidencePersister;
+  /** runId/tenantId 用于持久化 */
+  readonly runId?: string;
+  readonly tenantId?: string;
+}
 
 /**
  * Compact Engine — 金字塔级联决策树
@@ -18,12 +32,17 @@ export class CompactEngine {
   private readonly l3: SessionGraftCompact;
   private readonly l4: LegacyFullCompact;
 
-  constructor(options?: { provider?: ILLMProvider; maxEvidence?: number }) {
-    this.registry = new EvidenceRegistry({ maxEntries: options?.maxEvidence ?? 50 });
+  constructor(options?: CompactEngineOptions) {
+    this.registry = new EvidenceRegistry({
+      maxEntries: options?.maxEvidence ?? 50,
+      persister: options?.evidencePersister,
+      runId: options?.runId,
+      tenantId: options?.tenantId,
+    });
     this.l1 = new TimeGapMicroCompact();
     this.l2 = new EvidenceAwareCompact(this.registry);
-    this.l3 = new SessionGraftCompact();
-    this.l4 = new LegacyFullCompact(options?.provider);
+    this.l3 = new SessionGraftCompact({ keepRecentTurns: options?.keepRecentTurns });
+    this.l4 = new LegacyFullCompact(options?.provider, { compactModel: options?.compactModel, keepRecentTurns: options?.keepRecentTurns });
   }
 
   /**

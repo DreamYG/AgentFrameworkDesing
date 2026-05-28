@@ -22,6 +22,7 @@ export type SunsetAction = 'observe' | 'soft_sunset' | 'hard_sunset';
 
 export class SunsetEngine {
   private readonly specs = new Map<string, CompensationSpec>();
+  private readonly actions = new Map<string, SunsetAction>();
 
   register(spec: CompensationSpec): void {
     this.specs.set(spec.id, spec);
@@ -40,7 +41,11 @@ export class SunsetEngine {
 
   async executeSunset(compensationId: string, action: SunsetAction): Promise<void> {
     if (!this.specs.has(compensationId)) throw new Error(`Unknown compensation: ${compensationId}`);
-    void action;
+    this.actions.set(compensationId, action);
+  }
+
+  getAction(compensationId: string): SunsetAction | undefined {
+    return this.actions.get(compensationId);
   }
 
   private isMet(condition: SunsetCondition, context?: { currentVersion?: string; metrics?: Record<string, number>; interfaces?: readonly string[] }): boolean {

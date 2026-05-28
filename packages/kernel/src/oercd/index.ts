@@ -12,6 +12,10 @@ export interface OERCDContext {
   readonly toolCallCount: number;
 }
 
+export interface OERCDSkillSearch {
+  search(query: string): readonly { readonly id: string; readonly l0Summary?: string; readonly title?: string }[];
+}
+
 /** Phase O: 观察 — 任务开始时检索相关技能 */
 export interface IObservePhase {
   observe(ctx: OERCDContext): Promise<ObserveResult>;
@@ -45,7 +49,7 @@ export interface TraceStep {
 
 /** Phase R: 反思 — 效率分析 + 最优路径提取 */
 export interface IReflectPhase {
-  reflect(ctx: OERCDContext, trace: ExecutionTrace): Promise<ReflectResult>;
+  reflect(ctx: OERCDContext, trace?: ExecutionTrace): Promise<ReflectResult | null>;
 }
 
 export interface ReflectResult {
@@ -83,12 +87,19 @@ export interface DistributeResult {
 /**
  * OERCD MVP 实现 — Observe + Execute + Reflect
  */
-export class OERCDEngine {
+export class OERCDEngine implements IObservePhase, IExecutePhase, IReflectPhase {
   private readonly traces = new Map<string, ExecutionTrace>();
 
+  constructor(private readonly skills?: OERCDSkillSearch) {}
+
   /** O: 观察（MVP: 返回空匹配） */
-  async observe(_ctx: OERCDContext): Promise<ObserveResult> {
-    return { matchedSkills: [], episodicMemories: [], confidence: 0 };
+  async observe(ctx: OERCDContext): Promise<ObserveResult> {
+    const matched = this.skills?.search(ctx.taskDescription).slice(0, 5) ?? [];
+    return {
+      matchedSkills: matched.map((skill) => skill.id),
+      episodicMemories: [],
+      confidence: matched.length > 0 ? 0.6 : 0,
+    };
   }
 
   /** E: 记录执行轨迹 */
@@ -97,15 +108,16 @@ export class OERCDEngine {
   }
 
   /** R: 反思（MVP: 工具调用>=5 才触发） */
-  async reflect(ctx: OERCDContext): Promise<ReflectResult | null> {
+  async reflect(ctx: OERCDContext, trace?: ExecutionTrace): Promise<ReflectResult | null> {
     if (ctx.toolCallCount < 5) return null;
-    const trace = this.traces.get(ctx.runId);
-    if (!trace) return null;
+    const targetTrace = trace ?? this.traces.get(ctx.runId);
+    if (!targetTrace) return null;
+    if (targetTrace.steps.length === 0) return null;
 
-    const successRate = trace.steps.filter((s) => s.success).length / trace.steps.length;
+    const successRate = targetTrace.steps.filter((s) => s.success).length / targetTrace.steps.length;
     return {
       efficiencyScore: successRate,
-      optimalPath: trace.steps.filter((s) => s.success).map((s) => s.action),
+      optimalPath: targetTrace.steps.filter((s) => s.success).map((s) => s.action),
       improvements: [],
       shouldCrystallize: successRate > 0.8,
     };

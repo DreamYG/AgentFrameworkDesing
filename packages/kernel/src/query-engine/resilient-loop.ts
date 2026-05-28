@@ -74,9 +74,8 @@ export class ResilientLoop {
         if (!this.isRetryable(lastError)) {
           throw new ProviderError(
             `Non-retryable provider error: ${lastError.message}`,
-            'PROVIDER.NON_RETRYABLE',
             false,
-            { attempt, originalError: lastError.message },
+            { reason: 'non_retryable', attempt, originalError: lastError.message },
           );
         }
 
@@ -89,9 +88,8 @@ export class ResilientLoop {
 
     throw new ProviderError(
       `All provider attempts exhausted: ${lastError?.message}`,
-      'PROVIDER.EXHAUSTED',
       false,
-      { maxRetries: this.maxRetries },
+      { reason: 'exhausted', maxRetries: this.maxRetries },
     );
   }
 

@@ -26,4 +26,6 @@ COPY --from=builder /app/apps ./apps
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/mcp-servers ./mcp-servers
 EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1
 CMD ["node", "apps/api-gateway/dist/main.js"]

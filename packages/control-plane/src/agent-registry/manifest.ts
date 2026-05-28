@@ -88,6 +88,28 @@ export class PackRegistry {
     pack.status = 'uninstalled';
   }
 
+  upgrade(manifest: CapabilityPackManifest, kernelVersion: string): InstalledPack {
+    const current = this.packs.get(manifest.id);
+    if (!current) return this.install(manifest, kernelVersion);
+    if (!satisfies(kernelVersion, manifest.kernelCompatibility)) {
+      throw new Error(`Pack ${manifest.id} requires kernel ${manifest.kernelCompatibility}, got ${kernelVersion}`);
+    }
+    current.status = 'installed';
+    (current as { manifest: CapabilityPackManifest }).manifest = manifest;
+    return current;
+  }
+
+  rollback(packId: string, version: string): void {
+    const pack = this.requirePack(packId);
+    (pack.manifest as { version: string }).version = version;
+    pack.status = 'installed';
+  }
+
+  async healthCheck(packId: string): Promise<{ healthy: boolean; endpoint: string }> {
+    const pack = this.requirePack(packId);
+    return { healthy: pack.status === 'enabled', endpoint: pack.manifest.healthCheck };
+  }
+
   get(packId: string): InstalledPack | undefined {
     return this.packs.get(packId);
   }

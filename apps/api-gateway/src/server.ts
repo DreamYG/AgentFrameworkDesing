@@ -3,14 +3,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { ConnectorRegistry, type ConnectorDefinition } from '@nexus/tool-gateway';
+import { ConnectorRegistry, type ConnectorDefinition, type ConnectorToolBridge } from '@nexus/tool-gateway';
 import { MessageRouter } from './middleware/message-router.js';
+import { FeishuChannelAdapter, type FeishuWebhookPayload } from './channels/feishu.js';
 
 export interface GatewayConfig {
   readonly port: number;
-  readonly wsPort: number;
   readonly corsOrigins: readonly string[];
   readonly hmacSecret?: string;
+  readonly feishuEncryptKey?: string;
 }
 
 export interface NexusMessage {
@@ -49,16 +50,28 @@ export class GatewayServer {
   private resumeHandler?: (runId: string) => Promise<void>;
   private budgetRefillHandler?: (runId: string, amount?: number) => Promise<void>;
   private auditProvider?: (runId: string) => readonly unknown[];
+  private tenantAuditProvider?: (tenantId: string) => readonly unknown[];
   private approvalsProvider?: () => readonly unknown[];
   private packsProvider?: () => readonly unknown[];
-  private packActionHandler?: (packId: string, action: 'enable' | 'disable') => Promise<void>;
+  private packActionHandler?: (packId: string, action: 'enable' | 'disable' | 'uninstall') => Promise<void>;
+  private packInstallHandler?: (manifest: unknown) => Promise<void>;
+  private packHealthProvider?: (packId: string) => Promise<unknown>;
+  private agentsProvider?: () => readonly unknown[];
+  private budgetProvider?: (runId: string) => unknown;
   private runStatusProvider?: RunStatusProvider;
   private runListProvider?: RunListProvider;
   private messageRouter?: MessageRouter;
+  private feishuAdapter?: FeishuChannelAdapter;
+  private connectorBridge?: ConnectorToolBridge;
+  private healthChecks: ReadonlyArray<{ name: string; check: () => Promise<void> }> = [];
   private readonly runs = new Map<string, { status: string; result?: unknown }>();
   private readonly connectors = new ConnectorRegistry();
 
-  constructor(private readonly config: GatewayConfig) {}
+  constructor(private readonly config: GatewayConfig) {
+    if (config.feishuEncryptKey) {
+      this.feishuAdapter = new FeishuChannelAdapter(config.feishuEncryptKey);
+    }
+  }
 
   onMessage(handler: MessageHandler): void {
     this.messageHandler = handler;
@@ -88,6 +101,10 @@ export class GatewayServer {
     this.auditProvider = provider;
   }
 
+  onTenantAuditList(provider: (tenantId: string) => readonly unknown[]): void {
+    this.tenantAuditProvider = provider;
+  }
+
   onApprovalList(provider: () => readonly unknown[]): void {
     this.approvalsProvider = provider;
   }
@@ -96,8 +113,24 @@ export class GatewayServer {
     this.packsProvider = provider;
   }
 
-  onPackAction(handler: (packId: string, action: 'enable' | 'disable') => Promise<void>): void {
+  onPackAction(handler: (packId: string, action: 'enable' | 'disable' | 'uninstall') => Promise<void>): void {
     this.packActionHandler = handler;
+  }
+
+  onPackInstall(handler: (manifest: unknown) => Promise<void>): void {
+    this.packInstallHandler = handler;
+  }
+
+  onPackHealth(provider: (packId: string) => Promise<unknown>): void {
+    this.packHealthProvider = provider;
+  }
+
+  onAgentList(provider: () => readonly unknown[]): void {
+    this.agentsProvider = provider;
+  }
+
+  onBudgetGet(provider: (runId: string) => unknown): void {
+    this.budgetProvider = provider;
   }
 
   onRunStatus(provider: RunStatusProvider): void {
@@ -110,6 +143,15 @@ export class GatewayServer {
 
   setMessageRouter(router: MessageRouter): void {
     this.messageRouter = router;
+  }
+
+  setConnectorBridge(bridge: ConnectorToolBridge): void {
+    this.connectorBridge = bridge;
+  }
+
+  /** 注入依赖健康检查（DB / Redis 等），任一失败 /health 返 503 */
+  setHealthChecks(checks: ReadonlyArray<{ name: string; check: () => Promise<void> }>): void {
+    this.healthChecks = checks;
   }
 
   /**
@@ -164,6 +206,59 @@ export class GatewayServer {
     return response;
   }
 
+  async handleHealth(): Promise<{
+    status: 'ok' | 'degraded';
+    uptimeSeconds: number;
+    checks: Record<string, { healthy: boolean; error?: string }>;
+  }> {
+    const checks: Record<string, { healthy: boolean; error?: string }> = {};
+    let allOk = true;
+    for (const { name, check } of this.healthChecks) {
+      try {
+        await check();
+        checks[name] = { healthy: true };
+      } catch (error) {
+        allOk = false;
+        checks[name] = {
+          healthy: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+    return {
+      status: allOk ? 'ok' : 'degraded',
+      uptimeSeconds: Math.round(process.uptime()),
+      checks,
+    };
+  }
+
+  handleReady(): { ready: boolean; running: boolean } {
+    return { ready: this.messageHandler !== undefined, running: this.running };
+  }
+
+  async handleFeishuWebhook(request: {
+    body: FeishuWebhookPayload;
+    rawBody?: string;
+    headers?: Record<string, string>;
+  }): Promise<GatewayResponse | { challenge: string }> {
+    if (request.body.challenge) {
+      return { challenge: request.body.challenge };
+    }
+    if (!this.feishuAdapter) {
+      return { requestId: '', status: 'rejected', message: 'Feishu channel not configured' };
+    }
+    const timestamp = request.headers?.['x-lark-request-timestamp'] ?? '';
+    const nonce = request.headers?.['x-lark-request-nonce'] ?? '';
+    const signature = request.headers?.['x-lark-signature'] ?? '';
+    if (timestamp && nonce && signature && request.rawBody) {
+      const valid = this.feishuAdapter.verify(timestamp, nonce, request.rawBody, signature);
+      if (!valid) return { requestId: '', status: 'rejected', message: 'Invalid Feishu signature' };
+    }
+    const message = this.feishuAdapter.normalize(request.body);
+    if (!message) return { requestId: '', status: 'rejected', message: 'Unsupported Feishu payload' };
+    return this.messageHandler?.(message) ?? { requestId: message.id, status: 'error', message: 'No message handler registered' };
+  }
+
   /**
    * GET /api/v1/runs/:id — 获取 Run 状态
    */
@@ -196,6 +291,18 @@ export class GatewayServer {
     return this.auditProvider?.(runId) ?? [];
   }
 
+  listTenantAudit(tenantId: string): readonly unknown[] {
+    return this.tenantAuditProvider?.(tenantId) ?? [];
+  }
+
+  listAgents(): readonly unknown[] {
+    return this.agentsProvider?.() ?? [];
+  }
+
+  getBudget(runId: string): unknown {
+    return this.budgetProvider?.(runId) ?? null;
+  }
+
   async handleCancel(runId: string, body: { reason?: string }): Promise<{ success: boolean }> {
     if (!this.cancelHandler) return { success: false };
     await this.cancelHandler(runId, body.reason ?? 'user_cancel');
@@ -218,9 +325,15 @@ export class GatewayServer {
     return this.packsProvider?.() ?? [];
   }
 
-  async handlePackAction(packId: string, action: 'enable' | 'disable'): Promise<{ success: boolean }> {
+  async handlePackAction(packId: string, action: 'enable' | 'disable' | 'uninstall'): Promise<{ success: boolean }> {
     if (!this.packActionHandler) return { success: false };
     await this.packActionHandler(packId, action);
+    return { success: true };
+  }
+
+  async handlePackInstall(manifest: unknown): Promise<{ success: boolean }> {
+    if (!this.packInstallHandler) return { success: false };
+    await this.packInstallHandler(manifest);
     return { success: true };
   }
 
@@ -247,6 +360,15 @@ export class GatewayServer {
     await this.app.register(cors, { origin: [...this.config.corsOrigins] });
     await this.app.register(websocket);
 
+    this.app.get('/health', async (_request, reply) => {
+      const health = await this.handleHealth();
+      return reply.code(health.status === 'ok' ? 200 : 503).send(health);
+    });
+    this.app.get('/ready', async (_request, reply) => {
+      const ready = this.handleReady();
+      return reply.code(ready.ready ? 200 : 503).send(ready);
+    });
+
     this.app.post('/api/v1/messages', async (request, reply) => {
       const response = await this.handleMessage({
         body: request.body as {
@@ -262,6 +384,19 @@ export class GatewayServer {
         ),
       });
 
+      const statusCode = response.status === 'accepted' ? 202 : response.status === 'rejected' ? 400 : 500;
+      return reply.code(statusCode).send(response);
+    });
+
+    this.app.post('/webhooks/feishu', async (request, reply) => {
+      const response = await this.handleFeishuWebhook({
+        body: request.body as FeishuWebhookPayload,
+        rawBody: JSON.stringify(request.body ?? {}),
+        headers: Object.fromEntries(
+          Object.entries(request.headers).map(([key, value]) => [key, String(value)]),
+        ),
+      });
+      if ('challenge' in response) return reply.send(response);
       const statusCode = response.status === 'accepted' ? 202 : response.status === 'rejected' ? 400 : 500;
       return reply.code(statusCode).send(response);
     });
@@ -306,12 +441,31 @@ export class GatewayServer {
       return reply.send({ audit: this.listAudit(params.id) });
     });
 
+    this.app.get('/api/v1/runs/:id/budget', async (request, reply) => {
+      const params = request.params as { id: string };
+      return reply.send({ budget: this.getBudget(params.id) });
+    });
+
+    this.app.get('/api/v1/audit', async (request, reply) => {
+      const query = request.query as { tenantId?: string };
+      return reply.send({ audit: this.listTenantAudit(query.tenantId ?? 'default') });
+    });
+
+    this.app.get('/api/v1/agents', async (_request, reply) => {
+      return reply.send({ agents: this.listAgents() });
+    });
+
     this.app.get('/api/v1/approvals/pending', async (_request, reply) => {
       return reply.send({ approvals: this.listApprovals() });
     });
 
     this.app.get('/api/v1/packs', async (_request, reply) => {
       return reply.send({ packs: this.listPacks() });
+    });
+
+    this.app.post('/api/v1/packs/install', async (request, reply) => {
+      const response = await this.handlePackInstall(request.body);
+      return reply.code(response.success ? 201 : 400).send(response);
     });
 
     this.app.post('/api/v1/packs/:id/enable', async (request, reply) => {
@@ -324,6 +478,17 @@ export class GatewayServer {
       const params = request.params as { id: string };
       const response = await this.handlePackAction(params.id, 'disable');
       return reply.code(response.success ? 200 : 400).send(response);
+    });
+
+    this.app.post('/api/v1/packs/:id/uninstall', async (request, reply) => {
+      const params = request.params as { id: string };
+      const response = await this.handlePackAction(params.id, 'uninstall');
+      return reply.code(response.success ? 200 : 400).send(response);
+    });
+
+    this.app.get('/api/v1/packs/:id/health', async (request, reply) => {
+      const params = request.params as { id: string };
+      return reply.send(await this.packHealthProvider?.(params.id) ?? { healthy: false });
     });
 
     this.app.post('/api/v1/connectors', async (request, reply) => {
@@ -339,18 +504,28 @@ export class GatewayServer {
     this.app.post('/api/v1/connectors/:id/enable', async (request, reply) => {
       const params = request.params as { id: string };
       this.connectors.enable(params.id);
-      return reply.send({ success: true });
+      const connector = this.connectors.get(params.id);
+      const tools = connector ? await this.connectorBridge?.enable(connector) : [];
+      return reply.send({ success: true, tools });
     });
 
     this.app.post('/api/v1/connectors/:id/disable', async (request, reply) => {
       const params = request.params as { id: string };
       this.connectors.disable(params.id);
+      await this.connectorBridge?.disable(params.id);
       return reply.send({ success: true });
     });
 
     this.app.get('/api/v1/connectors/:id/health', async (request, reply) => {
       const params = request.params as { id: string };
       return reply.send(await this.connectors.healthCheck(params.id));
+    });
+
+    this.app.post('/api/v1/connectors/:id/credentials', async (request, reply) => {
+      const params = request.params as { id: string };
+      const body = request.body as { secretRef: string };
+      this.connectors.bindCredential(params.id, body.secretRef);
+      return reply.send({ success: true });
     });
 
     this.app.get('/ws/stream/:runId', { websocket: true }, (socket: any, request) => {

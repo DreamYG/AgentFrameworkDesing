@@ -32,6 +32,11 @@ export class ConnectorRegistry {
     this.connectors.set(id, { ...connector, enabled: false });
   }
 
+  bindCredential(id: string, secretRef: string): void {
+    const connector = this.requireConnector(id);
+    this.connectors.set(id, { ...connector, authMethod: 'secret_ref', secretRef });
+  }
+
   get(id: string): ConnectorDefinition | undefined {
     return this.connectors.get(id);
   }

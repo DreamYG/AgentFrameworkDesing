@@ -37,6 +37,35 @@ export class MCPAdapter implements IToolProtocolAdapter {
   }
 
   async discover(): Promise<readonly ToolDefinition[]> {
+    const res = await fetch(new URL('/tools', this.serverUrl));
+    if (!res.ok) return [...this.tools.values()];
+    const remoteTools = await res.json() as Array<{
+      name: string;
+      description: string;
+      inputSchema?: Record<string, unknown>;
+      schema?: Record<string, unknown>;
+      riskLevel?: ToolDefinition['riskLevel'];
+    }>;
+    this.tools.clear();
+    for (const remote of remoteTools) {
+      const tool = buildTool({
+        name: remote.name,
+        description: remote.description,
+        schema: remote.inputSchema ?? remote.schema ?? { type: 'object' },
+        riskLevel: remote.riskLevel ?? 'R2',
+        characteristics: {
+          isReadOnly: remote.riskLevel === 'R0',
+          isDestructive: false,
+          isConcurrencySafe: remote.riskLevel === 'R0',
+          isIdempotent: remote.riskLevel === 'R0',
+          reversibility: 'reversible',
+          environmentSideEffects: remote.riskLevel === 'R0' ? ['none'] : ['external_system_state'],
+          maxOutputTokens: 4096,
+        },
+        execute: (params, ctx) => this.callRemote(remote.name, params, ctx),
+      });
+      this.tools.set(tool.name, tool);
+    }
     return [...this.tools.values()];
   }
 
@@ -45,21 +74,36 @@ export class MCPAdapter implements IToolProtocolAdapter {
   }
 
   async execute(toolName: string, params: unknown, ctx: ToolContext): Promise<ToolResult> {
-    const tool = this.tools.get(toolName);
-    if (!tool) {
-      return { success: false, error: `MCP tool not found: ${toolName}`, durationMs: 0 };
-    }
-    const started = Date.now();
-    const result = await tool.execute(params, ctx);
-    return { ...result, durationMs: Date.now() - started };
+    return this.callRemote(toolName, params, ctx);
   }
 
   async ping(): Promise<boolean> {
-    return true;
+    try {
+      const res = await fetch(new URL('/health', this.serverUrl), { method: 'GET' });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   async close(): Promise<void> {
     // cleanup
+  }
+
+  private async callRemote(toolName: string, params: unknown, ctx: ToolContext): Promise<ToolResult> {
+    const started = Date.now();
+    try {
+      const res = await fetch(new URL(`/tools/${encodeURIComponent(toolName)}/call`, this.serverUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params, context: { runId: ctx.runId, tenantId: ctx.tenantId, agentId: ctx.agentId, turnIndex: ctx.turnIndex } }),
+        signal: ctx.abortSignal,
+      });
+      const body = await res.json() as ToolResult;
+      return { ...body, durationMs: Date.now() - started };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error), durationMs: Date.now() - started };
+    }
   }
 }
 

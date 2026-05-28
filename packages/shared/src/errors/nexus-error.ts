@@ -18,20 +18,14 @@ export class NexusError extends Error {
   }
 }
 
-/** 工具执行失败 */
-export class ToolExecutionError extends NexusError {}
-
-/** LLM Provider 通信失败 */
-export class ProviderError extends NexusError {}
-
-/** 安全护栏违规 */
-export class GuardrailViolation extends NexusError {}
+/**
+ * 跨域基础错误：
+ * - 业务域错误（Tool/Provider/Guardrail/Budget）在各自 *.error.ts 文件。
+ * - 下列错误暂未拆分到独立域，统一在此声明。
+ */
 
 /** 编排异常 */
 export class OrchestrationError extends NexusError {}
-
-/** 预算耗尽 */
-export class BudgetExhaustedError extends NexusError {}
 
 /** 审批超时 */
 export class ApprovalTimeoutError extends NexusError {}

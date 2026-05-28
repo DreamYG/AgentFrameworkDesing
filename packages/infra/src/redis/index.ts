@@ -64,8 +64,26 @@ export class RedisClient {
     await this.client.set(key, JSON.stringify(value));
   }
 
+  async compareAndSwap<T>(
+    key: string,
+    expectedVersion: number,
+    newValue: T,
+    newVersion: number,
+    ttlMs?: number,
+  ): Promise<boolean> {
+    const current = await this.get<{ version?: number }>(key);
+    if ((current?.version ?? 0) !== expectedVersion) return false;
+    await this.set(key, { ...(newValue as Record<string, unknown>), version: newVersion }, ttlMs);
+    return true;
+  }
+
   async delete(key: string): Promise<boolean> {
     return (await this.client.del(key)) > 0;
+  }
+
+  /** 健康检查：返回 'PONG' 表示连接正常 */
+  async ping(): Promise<string> {
+    return this.client.ping();
   }
 
   async close(): Promise<void> {

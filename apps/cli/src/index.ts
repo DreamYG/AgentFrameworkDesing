@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { SkillStore } from '@nexus/memory';
+import { CreateMcpScaffold } from '@nexus/infra';
 
 const program = new Command();
-const store = new SkillStore();
-const publishedSkills = new Map<string, { version: number; publishedAt: Date }>();
+const store = new SkillStore(process.env['NEXUS_SKILL_DIR'] ?? '.nexus/skills');
 
 program.name('nexus').description('Nexus CLI').version('0.0.1');
 
@@ -14,26 +14,46 @@ program
   .requiredOption('--title <title>')
   .requiredOption('--content <content>')
   .option('--tags <tags>', 'comma-separated tags', '')
-  .action((opts: { id: string; title: string; content: string; tags: string }) => {
-    store.add({
+  .option('--evidence <ids>', 'comma-separated evidence ids', '')
+  .option('--classification <classification>', 'data classification', 'internal')
+  .action(async (opts: { id: string; title: string; content: string; tags: string; evidence: string; classification: string }) => {
+    await store.load();
+    const skill = {
       id: opts.id,
       title: opts.title,
       content: opts.content,
       l0Summary: opts.content.slice(0, 80),
       tags: opts.tags ? opts.tags.split(',') : [],
+      evidenceIds: opts.evidence ? opts.evidence.split(',') : [],
+      dataClassification: opts.classification as 'public' | 'internal' | 'confidential' | 'top_secret',
       version: 1,
+      status: 'draft' as const,
       createdAt: new Date(),
-    });
+    };
+    const validation = store.validate(skill);
+    if (!validation.valid) {
+      process.stderr.write(`Skill invalid: ${validation.errors.join('; ')}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    await store.add(skill);
     process.stdout.write(`Skill created: ${opts.id}\n`);
   });
 
 program
   .command('skill:validate')
   .requiredOption('--id <id>')
-  .action((opts: { id: string }) => {
+  .action(async (opts: { id: string }) => {
+    await store.load();
     const skill = store.get(opts.id);
     if (!skill) {
       process.stderr.write(`Skill not found: ${opts.id}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const validation = store.validate(skill);
+    if (!validation.valid) {
+      process.stderr.write(`Skill invalid: ${validation.errors.join('; ')}\n`);
       process.exitCode = 1;
       return;
     }
@@ -43,39 +63,41 @@ program
 program
   .command('skill:publish')
   .requiredOption('--id <id>')
-  .action((opts: { id: string }) => {
-    const skill = store.get(opts.id);
-    if (!skill) {
+  .action(async (opts: { id: string }) => {
+    await store.load();
+    try {
+      const skill = await store.publish(opts.id);
+      process.stdout.write(`Skill published: ${skill.id}@${skill.version}\n`);
+    } catch {
       process.stderr.write(`Skill not found: ${opts.id}\n`);
       process.exitCode = 1;
-      return;
     }
-    publishedSkills.set(skill.id, { version: skill.version, publishedAt: new Date() });
-    process.stdout.write(`Skill published: ${skill.id}@${skill.version}\n`);
   });
 
 program
   .command('skill:version')
   .requiredOption('--id <id>')
-  .action((opts: { id: string }) => {
+  .action(async (opts: { id: string }) => {
+    await store.load();
     const skill = store.get(opts.id);
-    const published = publishedSkills.get(opts.id);
-    process.stdout.write(JSON.stringify({ id: opts.id, localVersion: skill?.version, publishedVersion: published?.version }) + '\n');
+    process.stdout.write(JSON.stringify({ id: opts.id, version: skill?.version, status: skill?.status }) + '\n');
   });
 
 program
   .command('skill:rollback')
   .requiredOption('--id <id>')
   .requiredOption('--version <version>')
-  .action((opts: { id: string; version: string }) => {
-    publishedSkills.set(opts.id, { version: Number(opts.version), publishedAt: new Date() });
-    process.stdout.write(`Skill rolled back: ${opts.id}@${opts.version}\n`);
+  .action(async (opts: { id: string; version: string }) => {
+    await store.load();
+    const skill = await store.rollback(opts.id, Number(opts.version));
+    process.stdout.write(`Skill rolled back: ${skill.id}@${skill.version}\n`);
   });
 
 program
   .command('skill:test')
   .requiredOption('--id <id>')
-  .action((opts: { id: string }) => {
+  .action(async (opts: { id: string }) => {
+    await store.load();
     const skill = store.get(opts.id);
     if (!skill) {
       process.stderr.write(`Skill not found: ${opts.id}\n`);
@@ -138,6 +160,22 @@ program
   .option('--gateway <url>', 'gateway base url', 'http://localhost:3000')
   .action(async (opts: { run: string; gateway: string }) => {
     process.stdout.write(JSON.stringify(await postJson(`${opts.gateway}/api/v1/runs/${opts.run}/resume`, {})) + '\n');
+  });
+
+program
+  .command('mcp:create')
+  .requiredOption('--name <name>')
+  .option('--dir <dir>', 'target directory', 'mcp-servers')
+  .option('--description <description>', 'description')
+  .action(async (opts: { name: string; dir: string; description?: string }) => {
+    const scaffold = new CreateMcpScaffold();
+    const target = `${opts.dir.replace(/[\\/]$/, '')}/${opts.name}`;
+    const files = await scaffold.writeFiles(target, {
+      name: opts.name,
+      description: opts.description,
+      author: 'Nexus',
+    });
+    process.stdout.write(JSON.stringify({ created: target, files }) + '\n');
   });
 
 program.parse();

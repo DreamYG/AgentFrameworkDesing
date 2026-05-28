@@ -1,4 +1,5 @@
 import type { NexusMessage } from '../server.js';
+import { InputGuardrail } from '@nexus/guardrails';
 
 /**
  * Message Router — 协议归一化管线
@@ -10,6 +11,11 @@ export interface MessageRouterConfig {
   readonly rateLimitWindowMs: number;
 }
 
+export interface MessageRouterBackend {
+  isDuplicate(messageId: string, ttlMs: number): Promise<boolean>;
+  checkRateLimit(key: string, maxRequests: number, windowMs: number): Promise<boolean>;
+}
+
 export type RouteResult =
   | { readonly accepted: true; readonly message: NexusMessage }
   | { readonly accepted: false; readonly reason: string; readonly code: number };
@@ -18,8 +24,12 @@ export class MessageRouter {
   private readonly processedIds = new Map<string, number>();
   private readonly rateLimits = new Map<string, { count: number; resetAt: number }>();
   private readonly config: MessageRouterConfig;
+  private readonly inputGuardrail = new InputGuardrail();
 
-  constructor(config: MessageRouterConfig) {
+  constructor(
+    config: MessageRouterConfig,
+    private readonly backend?: MessageRouterBackend,
+  ) {
     this.config = config;
   }
 
@@ -33,22 +43,25 @@ export class MessageRouter {
     userId: string;
     channel: NexusMessage['channel'];
     content: string;
-    signature?: string;
     metadata?: Record<string, unknown>;
   }): Promise<RouteResult> {
     const messageId = raw.id ?? crypto.randomUUID();
     this.evictExpired();
 
-    if (this.processedIds.has(messageId)) {
+    const scan = this.inputGuardrail.scan(raw.content);
+    if (!scan.safe) {
+      return { accepted: false, reason: scan.reason, code: 400 };
+    }
+
+    if (await this.isDuplicate(messageId)) {
       return { accepted: false, reason: 'Duplicate message', code: 409 };
     }
-    this.processedIds.set(messageId, Date.now() + this.config.deduplicationTtlMs);
 
     if (!raw.tenantId || !raw.userId) {
       return { accepted: false, reason: 'Missing identity', code: 401 };
     }
 
-    if (!this.checkRateLimit(`${raw.tenantId}:${raw.userId}`)) {
+    if (!(await this.checkRateLimit(`${raw.tenantId}:${raw.userId}`))) {
       return { accepted: false, reason: 'Rate limit exceeded', code: 429 };
     }
 
@@ -65,7 +78,19 @@ export class MessageRouter {
     return { accepted: true, message };
   }
 
-  private checkRateLimit(key: string): boolean {
+  private async isDuplicate(messageId: string): Promise<boolean> {
+    if (this.backend) {
+      return this.backend.isDuplicate(messageId, this.config.deduplicationTtlMs);
+    }
+    if (this.processedIds.has(messageId)) return true;
+    this.processedIds.set(messageId, Date.now() + this.config.deduplicationTtlMs);
+    return false;
+  }
+
+  private async checkRateLimit(key: string): Promise<boolean> {
+    if (this.backend) {
+      return this.backend.checkRateLimit(key, this.config.rateLimitPerUser, this.config.rateLimitWindowMs);
+    }
     const now = Date.now();
     const bucket = this.rateLimits.get(key);
     if (!bucket || now >= bucket.resetAt) {

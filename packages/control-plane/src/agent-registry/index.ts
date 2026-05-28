@@ -44,6 +44,12 @@ export class AgentRegistry {
     this.agents.delete(agentId);
   }
 
+  setEnabled(agentId: string, enabled: boolean): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    this.agents.set(agentId, { ...agent, enabled, updatedAt: new Date() });
+  }
+
   get(agentId: string): AgentDefinition | undefined {
     return this.agents.get(agentId);
   }

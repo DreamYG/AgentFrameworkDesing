@@ -224,15 +224,179 @@ describe('Scheduler', () => {
 });
 
 describe('IntentRouter', () => {
-  it('should route to correct phase by keywords', () => {
+  it('should route to correct phase by keywords when no LLM classifier', async () => {
     const router = new IntentRouter({ fallbackAgentId: 'fallback', confidenceThreshold: 0.5 });
     router.registerAgents([mockAgent]);
 
-    const intent = router.route('帮我把任务拆解一下');
+    const intent = await router.route('帮我把任务拆解一下');
     expect(intent.phase).toBe('intent');
+    expect(intent.source).toBe('keyword');
 
-    const execIntent = router.route('帮我实现这个代码');
+    const execIntent = await router.route('帮我实现这个代码');
     expect(execIntent.phase).toBe('execution');
+  });
+
+  it('should prefer LLM classifier when confidence is high enough', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      llmClassifier: {
+        async classify(input) {
+          expect(input.candidates[0]?.id).toBe('agent-1');
+          return { agentId: 'agent-1', confidence: 0.82, reason: 'matched description' };
+        },
+      },
+    });
+    router.registerAgents([mockAgent]);
+
+    const intent = await router.route('请帮我跟踪项目进度', { phase: 'intent' });
+    expect(intent.source).toBe('llm');
+    expect(intent.suggestedAgentId).toBe('agent-1');
+    expect(intent.confidence).toBeCloseTo(0.82, 5);
+    expect(intent.reason).toBe('matched description');
+  });
+
+  it('should fall back to keyword when LLM confidence is below threshold', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.7,
+      llmClassifier: {
+        async classify() {
+          return { agentId: 'agent-1', confidence: 0.4 };
+        },
+      },
+    });
+    router.registerAgents([mockAgent]);
+
+    const intent = await router.route('随便聊一聊');
+    expect(intent.source).not.toBe('llm');
+  });
+
+  it('should fall back to keyword when LLM throws', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      llmClassifier: {
+        async classify() {
+          throw new Error('llm timeout');
+        },
+      },
+    });
+    router.registerAgents([mockAgent]);
+
+    const intent = await router.route('帮我拆解需求', { phase: 'intent' });
+    expect(intent.source).toBe('keyword');
+    expect(intent.suggestedAgentId).toBe('agent-1');
+  });
+
+  it('auto-detects phase from input keywords when context.phase is omitted', async () => {
+    const router = new IntentRouter({ fallbackAgentId: 'fallback', confidenceThreshold: 0.5 });
+    router.registerAgents([mockAgent]);
+
+    const exec = await router.route('帮我实现这个代码');
+    expect(exec.phase).toBe('execution');
+    const conn = await router.route('给团队发送会议通知');
+    expect(conn.phase).toBe('connection');
+    const intent = await router.route('帮我分析一下');
+    expect(intent.phase).toBe('intent');
+  });
+
+  it('respects custom executionKeywords / connectionKeywords overrides', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      executionKeywords: ['ship'],
+      connectionKeywords: ['ping'],
+    });
+    router.registerAgents([mockAgent]);
+    expect((await router.route('please ship the feature')).phase).toBe('execution');
+    expect((await router.route('please ping the team')).phase).toBe('connection');
+    expect((await router.route('please document the system')).phase).toBe('intent');
+  });
+
+  it('reports source=llm_low_confidence when LLM below threshold and keyword wins', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.8,
+      llmClassifier: {
+        async classify() {
+          return { agentId: 'agent-1', confidence: 0.4 };
+        },
+      },
+    });
+    router.registerAgents([mockAgent]);
+    const result = await router.route('帮我拆解任务', { phase: 'intent' });
+    expect(result.source).toBe('keyword');
+    expect(result.reason).toContain('llm_low_confidence');
+  });
+
+  it('reports source=llm_unknown_agent when LLM picks an agentId not in registry', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      llmClassifier: {
+        async classify() {
+          return { agentId: 'ghost-agent', confidence: 0.99 };
+        },
+      },
+    });
+    router.registerAgents([mockAgent]);
+    const result = await router.route('whatever', { phase: 'intent' });
+    expect(result.reason).toContain('llm_unknown_agent');
+  });
+
+  it('uses cache hit path and skips the LLM call', async () => {
+    let llmCalls = 0;
+    const cacheStore = new Map<string, unknown>();
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      llmClassifier: {
+        async classify() {
+          llmCalls++;
+          return { agentId: 'agent-1', confidence: 0.9, reason: 'fresh' };
+        },
+      },
+      cache: {
+        async get(key) { return (cacheStore.get(key) as never) ?? null; },
+        async set(key, value) { cacheStore.set(key, value); },
+      },
+    });
+    router.registerAgents([mockAgent]);
+
+    const first = await router.route('帮我跟踪进度', { phase: 'intent', tenantId: 't1' });
+    expect(first.source).toBe('llm');
+    expect(llmCalls).toBe(1);
+
+    const second = await router.route('帮我跟踪进度', { phase: 'intent', tenantId: 't1' });
+    expect(second.source).toBe('llm_cache_hit');
+    expect(llmCalls).toBe(1);
+  });
+
+  it('emits onMetric callback with source/latency/cacheHit/agentId', async () => {
+    const events: Array<{ source: string; cacheHit: boolean }> = [];
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.5,
+      onMetric: (event) => events.push({ source: event.source, cacheHit: event.cacheHit }),
+    });
+    router.registerAgents([mockAgent]);
+    await router.route('帮我拆解需求', { phase: 'intent' });
+    expect(events.length).toBe(1);
+    expect(events[0]!.source).toBe('keyword');
+    expect(events[0]!.cacheHit).toBe(false);
+  });
+
+  it('signals requiresClarification when keyword has no match and confidence is too low', async () => {
+    const router = new IntentRouter({
+      fallbackAgentId: 'fallback',
+      confidenceThreshold: 0.9,
+      clarificationThreshold: 0.5,
+    });
+    router.registerAgents([]);
+    const result = await router.route('xyz123');
+    expect(result.source).toBe('fallback');
+    expect(result.requiresClarification).toBe(true);
   });
 });
 

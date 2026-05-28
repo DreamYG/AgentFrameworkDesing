@@ -13,7 +13,7 @@ import type {
 import type { ToolDefinition } from '@nexus/shared';
 import type { ILLMProvider, QueryLoopConfig } from './types.js';
 import { QueryLoop } from './query-loop.js';
-import type { ToolExecutor } from './query-loop.js';
+import type { CompactRuntimeOptions, ToolExecutor } from './query-loop.js';
 import type { HookRegistry } from '../lifecycle/hook-registry.js';
 import type { GracefulShutdownController } from '../lifecycle/graceful-shutdown.js';
 import { CheckpointManager } from '../checkpoint/checkpoint-manager.js';
@@ -49,9 +49,12 @@ export class AgentRuntimeImpl implements IAgentRuntime<RuntimeInput<string>, Age
       shutdownController?: GracefulShutdownController;
       sessionSummaryProvider?: (runId: string) => Promise<string | null>;
       systemPrompt?: string;
+      systemPromptResolver?: (input: RuntimeInput<string>, context: AgentContext) => string;
       model: string;
+      modelResolver?: (input: RuntimeInput<string>, context: AgentContext) => string;
       maxTurns?: number;
       tokenBudget?: number;
+      compactOptions?: CompactRuntimeOptions;
     },
   ) {
     this.id = config.id;
@@ -60,7 +63,9 @@ export class AgentRuntimeImpl implements IAgentRuntime<RuntimeInput<string>, Age
     this.version = config.version;
     this.phase = config.phase;
     this.checkpointManager = config.checkpointManager ?? new CheckpointManager({ periodicInterval: 1 });
-    this.checkpointManager.setStore(new InMemoryCheckpointStore());
+    if (!config.checkpointManager) {
+      this.checkpointManager.setStore(new InMemoryCheckpointStore());
+    }
   }
 
   /**
@@ -98,15 +103,18 @@ export class AgentRuntimeImpl implements IAgentRuntime<RuntimeInput<string>, Age
       config: loopConfig,
       tenantId: context.tenantId,
       agentId: this.config.id,
+      compactOptions: this.config.compactOptions,
     });
 
+    const resolvedSystemPrompt = this.config.systemPromptResolver?.(input, context) ?? this.config.systemPrompt;
+    const resolvedModel = this.config.modelResolver?.(input, context) ?? this.config.model;
     const messages: LLMMessage[] = [
-      ...(this.config.systemPrompt ? [{ role: 'system' as const, content: this.config.systemPrompt }] : []),
+      ...(resolvedSystemPrompt ? [{ role: 'system' as const, content: resolvedSystemPrompt }] : []),
       { role: 'user', content: input.content },
     ];
 
     try {
-      for await (const event of loop.run(messages, this.config.model, context.runId)) {
+      for await (const event of loop.run(messages, resolvedModel, context.runId)) {
         yield event;
       }
     } finally {
@@ -145,6 +153,7 @@ export class AgentRuntimeImpl implements IAgentRuntime<RuntimeInput<string>, Age
       sessionSummaryProvider: this.config.sessionSummaryProvider,
       config: loopConfig,
       agentId: this.config.id,
+      compactOptions: this.config.compactOptions,
     });
 
     const messages = checkpoint.messages as LLMMessage[];
