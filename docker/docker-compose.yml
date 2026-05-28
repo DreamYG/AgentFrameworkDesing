@@ -1,47 +1,70 @@
 services:
   api-gateway:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    image: nexus-api-gateway:local
+    image: ${NEXUS_API_GATEWAY_IMAGE:-dreamyg/nexus-api-gateway:latest}
+    pull_policy: always
+    env_file:
+      - .env
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgres://nexus:nexus@postgres:5432/nexus
+      DATABASE_URL: postgres://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus}@postgres:5432/${POSTGRES_DB:-nexus}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      NEXUS_INFRA_MODE: ${NEXUS_INFRA_MODE:-production}
       NEXUS_LOG_MODE: ${NEXUS_LOG_MODE:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       NEXUS_TENANT_ID: ${NEXUS_TENANT_ID:-default}
-      NEXUS_MODEL: ${NEXUS_MODEL:-local-phase1-mvp}
+      DEFAULT_TENANT_ID: ${NEXUS_TENANT_ID:-default}
+      NEXUS_DEFAULT_MODEL: ${NEXUS_DEFAULT_MODEL:-local-phase1-mvp}
+      NEXUS_MODEL: ${NEXUS_DEFAULT_MODEL:-local-phase1-mvp}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      NEXUS_INTENT_MODEL: ${NEXUS_INTENT_MODEL:-}
+      NEXUS_INTENT_CONFIDENCE_THRESHOLD: ${NEXUS_INTENT_CONFIDENCE_THRESHOLD:-0.5}
+      NEXUS_INTENT_CLARIFICATION_THRESHOLD: ${NEXUS_INTENT_CLARIFICATION_THRESHOLD:-0.2}
+      NEXUS_INTENT_TIMEOUT_MS: ${NEXUS_INTENT_TIMEOUT_MS:-8000}
+      NEXUS_INTENT_CACHE_TTL_SEC: ${NEXUS_INTENT_CACHE_TTL_SEC:-60}
+      NEXUS_APPROVAL_POLICY: ${NEXUS_APPROVAL_POLICY:-auto}
+      NEXUS_RATE_LIMIT_PER_USER: ${NEXUS_RATE_LIMIT_PER_USER:-120}
+      NEXUS_HMAC_SECRET: ${NEXUS_HMAC_SECRET:-}
       FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
     ports:
-      - "3000:3000"
+      - "${NEXUS_API_GATEWAY_HOST_PORT:-3200}:3000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ready >/dev/null 2>&1 || exit 1"]
+      start_period: 30s
       interval: 10s
       timeout: 5s
       retries: 6
 
   console:
-    image: nexus-api-gateway:local
+    image: ${NEXUS_API_GATEWAY_IMAGE:-dreamyg/nexus-api-gateway:latest}
+    pull_policy: always
+    env_file:
+      - .env
     command: ["node", "apps/console/dist/server.js"]
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3001
-      NEXUS_GATEWAY_URL: ${NEXUS_GATEWAY_URL:-http://localhost:3000}
+      NEXUS_GATEWAY_URL: ${NEXUS_GATEWAY_URL:-http://localhost:3200}
     ports:
-      - "3001:3001"
+      - "${NEXUS_CONSOLE_HOST_PORT:-3201}:3001"
     depends_on:
       api-gateway:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health >/dev/null 2>&1 || exit 1"]
+      start_period: 40s
       interval: 10s
       timeout: 5s
       retries: 6
@@ -49,9 +72,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus
-      POSTGRES_DB: nexus
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
     ports:
       - "5432:5432"
     volumes:
