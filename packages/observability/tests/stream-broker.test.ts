@@ -16,6 +16,11 @@ describe('InMemoryAgentStreamBroker', () => {
     const broker = new InMemoryAgentStreamBroker();
     await broker.publishEvent('run-1', { type: 'text_delta', delta: 'a', runId: 'run-1' });
     await broker.publishEvent('run-1', { type: 'text_delta', delta: 'b', runId: 'run-1' });
+    await broker.publishEvent('run-1', {
+      type: 'completed',
+      runId: 'run-1',
+      result: { success: true, output: 'ok', tokensUsed: 0, turnsExecuted: 1, toolCallsCount: 0 },
+    });
 
     const collected: string[] = [];
     for await (const env of broker.subscribe('run-1', { consumerId: 'c', maxInFlight: 10 })) {
@@ -37,16 +42,43 @@ describe('InMemoryAgentStreamBroker', () => {
     expect(replayed).toEqual([2, 3]);
   });
 
+  it('waits for events published after subscribe connects', async () => {
+    const broker = new InMemoryAgentStreamBroker();
+    const collected: AgentStreamEvent['type'][] = [];
+
+    const consume = (async () => {
+      for await (const env of broker.subscribe('run-late', { consumerId: 'c', maxInFlight: 10 })) {
+        collected.push(env.event.type);
+      }
+    })();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await broker.publishEvent('run-late', { type: 'error', code: 'TEST', message: 'boom', recoverable: false, runId: 'run-late' });
+    await broker.publishEvent('run-late', {
+      type: 'completed',
+      runId: 'run-late',
+      result: { success: false, tokensUsed: 0, turnsExecuted: 1, toolCallsCount: 0 },
+    });
+
+    await consume;
+    expect(collected).toEqual(['error', 'completed']);
+  });
+
   it('records ack per consumer separately', async () => {
     const broker = new InMemoryAgentStreamBroker();
     await broker.ack('run-3', 'consumer-a', 1);
     await broker.ack('run-3', 'consumer-b', 1);
     // 不应抛错；具体 ack 内部状态不暴露，但应能继续 subscribe
     await broker.publishEvent('run-3', { type: 'text_delta', delta: 'x', runId: 'run-3' });
+    await broker.publishEvent('run-3', {
+      type: 'completed',
+      runId: 'run-3',
+      result: { success: true, tokensUsed: 0, turnsExecuted: 1, toolCallsCount: 0 },
+    });
     const seen: number[] = [];
     for await (const env of broker.subscribe('run-3', { consumerId: 'consumer-a', maxInFlight: 10 })) {
       seen.push(env.sequence);
     }
-    expect(seen).toEqual([1]);
+    expect(seen).toEqual([1, 2]);
   });
 });

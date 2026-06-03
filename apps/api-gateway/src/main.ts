@@ -140,14 +140,17 @@ const providerRouter = new ProviderRouter(
   anthropicProvider ?? openaiProvider ?? localProvider,
 );
 
+const resolvedDefaultModel = config.NEXUS_DEFAULT_MODEL
+  ?? process.env['NEXUS_MODEL']
+  ?? (anthropicProvider ? 'claude-sonnet-4-5' : openaiProvider ? 'gpt-4o-mini' : 'local-phase1-mvp');
 const agentDefaults = Object.fromEntries(PHASE_INTENT_AGENTS.map((agent) => [agent.id, {
-  provider: providerForModel(agent.model),
-  model: agent.model,
+  provider: 'local',
+  model: resolvedDefaultModel,
 } satisfies AgentRuntimeConfig]));
 const agentRuntimeResolution = loadAgentRuntimeConfigs({
   configPath: config.NEXUS_AGENT_CONFIG_PATH,
   defaults: agentDefaults,
-  defaultModel: config.NEXUS_DEFAULT_MODEL ?? process.env['NEXUS_MODEL'] ?? (anthropicProvider ? 'claude-sonnet-4-5' : openaiProvider ? 'gpt-4o-mini' : 'local-phase1-mvp'),
+  defaultModel: resolvedDefaultModel,
 });
 const agentOverrides: Record<string, PhaseIntentAgentOverride> = {};
 for (const [agentId, runtimeConfig] of Object.entries(agentRuntimeResolution.agents)) {
@@ -423,12 +426,6 @@ installSignal('SIGTERM');
 installSignal('SIGINT');
 
 await app.start();
-
-function providerForModel(model: string): AgentRuntimeConfig['provider'] {
-  if (model.startsWith('claude-')) return 'anthropic';
-  if (model.startsWith('gpt-') || model.startsWith('o')) return 'openai';
-  return 'local';
-}
 
 function createWebSearchProvider(
   env: NodeJS.ProcessEnv,

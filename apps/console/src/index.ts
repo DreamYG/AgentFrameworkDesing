@@ -1379,12 +1379,23 @@ const CONSOLE_BROWSER_SCRIPT = `
         pushTimeline('self_heal', evt.toolName + ' via ' + evt.strategy);
         break;
       case 'error':
+        if (!msg.content) {
+          msg.content = '⚠ ' + (evt.message || evt.code);
+        }
+        msg.done = true;
+        msg.error = true;
         addTrace(msg, 'error', '✕ ' + evt.code);
         pushTimeline('error', evt.code + ': ' + evt.message);
         break;
       case 'completed':
         msg.done = true;
         session.status = evt.result && evt.result.success ? 'succeeded' : 'failed';
+        if (!msg.content && evt.result && !evt.result.success) {
+          msg.content = '⚠ 运行失败（无文本输出）';
+          msg.error = true;
+        } else if (evt.result && evt.result.output && !msg.content) {
+          msg.content = evt.result.output;
+        }
         session.stats.tokens = (evt.result && evt.result.tokensUsed) || 0;
         session.stats.turns = (evt.result && evt.result.turnsExecuted) || session.stats.turns;
         addTrace(msg, 'completed', '✓ ' + (evt.result && evt.result.tokensUsed || 0) + 'tok');

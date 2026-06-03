@@ -429,6 +429,18 @@ export function createNexusApp(deps: NexusAppDeps): NexusApp {
       'gateway.message.accepted',
       { messageId: message.id, channel: message.channel },
     );
+    logger.debug(
+      { tenantId: message.tenantId },
+      'gateway.message.body',
+      {
+        messageId: message.id,
+        userId: message.userId,
+        channel: message.channel,
+        contentLength: message.content.length,
+        content: message.content,
+        metadata: message.metadata ?? {},
+      },
+    );
     const routed = await intentRouter.route(message.content, { tenantId: message.tenantId });
     logger.flow(
       { tenantId: message.tenantId },

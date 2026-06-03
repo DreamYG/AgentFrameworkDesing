@@ -11,9 +11,18 @@ export const agentRuntimeConfigSchema = z.object({
 
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
 
+const agentFileConfigSchema = z.object({
+  provider: z.enum(['anthropic', 'openai', 'local']).optional(),
+  model: z.string().min(1).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().positive().optional(),
+});
+
+type AgentFileConfig = z.infer<typeof agentFileConfigSchema>;
+
 const agentConfigFileSchema = z.object({
   defaultModel: z.string().optional(),
-  agents: z.record(z.string(), agentRuntimeConfigSchema).default({}),
+  agents: z.record(z.string(), agentFileConfigSchema).default({}),
 });
 
 export interface AgentRuntimeConfigResolution {
@@ -22,10 +31,16 @@ export interface AgentRuntimeConfigResolution {
 }
 
 /**
- * 加载每个 Agent 的运行时配置，优先级：
- * 1) `NEXUS_AGENT_<ID>_MODEL` / `NEXUS_AGENT_<ID>_PROVIDER` 等环境变量（ID 大写、`.`/`-` 替换为 `_`）
- * 2) `NEXUS_AGENT_CONFIG_PATH` 指向的 YAML/JSON 文件
- * 3) 默认值：与 PHASE_INTENT_AGENTS 内 `model` 字段一致
+ * 加载每个 Agent 的运行时模型配置。
+ *
+ * 模型与 provider 的解析优先级（从高到低）：
+ * 1. 环境变量 `NEXUS_AGENT_<ID>_MODEL` / `NEXUS_AGENT_<ID>_PROVIDER`（ID 大写、`.`/`-` 替换为 `_`）
+ * 2. `NEXUS_AGENT_CONFIG_PATH` 指向的 YAML/JSON 文件中对应 Agent 的字段
+ * 3. 全局默认模型 `NEXUS_DEFAULT_MODEL`（再回落到文件 `defaultModel`、`options.defaultModel`、`local-phase1-mvp`）
+ *
+ * 代码中不再保留任何硬编码的模型默认值；未显式配置的 Agent 一律使用全局默认模型。
+ * provider 未显式指定时，根据最终 model 前缀推断（claude- 前缀走 anthropic，gpt- 或 o 前缀走 openai，其余走 local）。
+ *
  * @stability S3
  */
 export function loadAgentRuntimeConfigs(options: {
@@ -36,25 +51,63 @@ export function loadAgentRuntimeConfigs(options: {
 }): AgentRuntimeConfigResolution {
   const env = options.env ?? process.env;
   const fromFile = options.configPath ? readAgentConfigFile(options.configPath) : { agents: {} };
-  const merged: Record<string, AgentRuntimeConfig> = { ...(options.defaults ?? {}) };
-
-  for (const [agentId, fileConfig] of Object.entries(fromFile.agents)) {
-    merged[agentId] = mergeConfig(merged[agentId], fileConfig);
-  }
-
-  for (const [agentId, current] of Object.entries(merged)) {
-    merged[agentId] = applyEnvOverrides(agentId, current, env);
-  }
 
   const defaultModel = env['NEXUS_DEFAULT_MODEL']
     ?? fromFile.defaultModel
     ?? options.defaultModel
     ?? 'local-phase1-mvp';
 
-  return { defaultModel, agents: merged };
+  const agentIds = new Set<string>([
+    ...Object.keys(options.defaults ?? {}),
+    ...Object.keys(fromFile.agents),
+  ]);
+
+  const agents: Record<string, AgentRuntimeConfig> = {};
+  for (const agentId of agentIds) {
+    agents[agentId] = resolveAgentConfig(agentId, {
+      fromFile: fromFile.agents[agentId],
+      env,
+      defaultModel,
+    });
+  }
+
+  return { defaultModel, agents };
 }
 
-function readAgentConfigFile(path: string): { defaultModel?: string; agents: Record<string, AgentRuntimeConfig> } {
+/** 推断 provider：claude- 前缀走 anthropic，gpt- 或 o 前缀走 openai，其余走 local */
+export function inferProviderFromModel(model: string): AgentRuntimeConfig['provider'] {
+  if (model.startsWith('claude-')) {
+    return 'anthropic';
+  }
+  if (model.startsWith('gpt-') || model.startsWith('o')) {
+    return 'openai';
+  }
+  return 'local';
+}
+
+function resolveAgentConfig(
+  agentId: string,
+  context: {
+    readonly fromFile?: AgentFileConfig;
+    readonly env: Record<string, string | undefined>;
+    readonly defaultModel: string;
+  },
+): AgentRuntimeConfig {
+  const key = `NEXUS_AGENT_${agentId.toUpperCase().replace(/[.-]/g, '_')}`;
+  const envProvider = context.env[`${key}_PROVIDER`] as AgentRuntimeConfig['provider'] | undefined;
+  const envModel = context.env[`${key}_MODEL`];
+  const envTemperature = context.env[`${key}_TEMPERATURE`];
+  const envMaxTokens = context.env[`${key}_MAX_TOKENS`];
+
+  const model = envModel ?? context.fromFile?.model ?? context.defaultModel;
+  const provider = envProvider ?? context.fromFile?.provider ?? inferProviderFromModel(model);
+  const temperature = envTemperature !== undefined ? Number(envTemperature) : context.fromFile?.temperature;
+  const maxTokens = envMaxTokens !== undefined ? Number(envMaxTokens) : context.fromFile?.maxTokens;
+
+  return agentRuntimeConfigSchema.parse({ provider, model, temperature, maxTokens });
+}
+
+function readAgentConfigFile(path: string): { defaultModel?: string; agents: Record<string, AgentFileConfig> } {
   try {
     const raw = readFileSync(path, 'utf8');
     const parsed = raw.trim().startsWith('{') ? JSON.parse(raw) : parse(raw);
@@ -63,31 +116,4 @@ function readAgentConfigFile(path: string): { defaultModel?: string; agents: Rec
   } catch (error) {
     throw new Error(`Failed to load agent config from ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-function mergeConfig(base: AgentRuntimeConfig | undefined, patch: Partial<AgentRuntimeConfig>): AgentRuntimeConfig {
-  return agentRuntimeConfigSchema.parse({
-    provider: patch.provider ?? base?.provider ?? 'local',
-    model: patch.model ?? base?.model ?? 'local-phase1-mvp',
-    temperature: patch.temperature ?? base?.temperature,
-    maxTokens: patch.maxTokens ?? base?.maxTokens,
-  });
-}
-
-function applyEnvOverrides(
-  agentId: string,
-  base: AgentRuntimeConfig,
-  env: Record<string, string | undefined>,
-): AgentRuntimeConfig {
-  const key = `NEXUS_AGENT_${agentId.toUpperCase().replace(/[.-]/g, '_')}`;
-  const provider = env[`${key}_PROVIDER`] as AgentRuntimeConfig['provider'] | undefined;
-  const model = env[`${key}_MODEL`];
-  const temperature = env[`${key}_TEMPERATURE`];
-  const maxTokens = env[`${key}_MAX_TOKENS`];
-  return mergeConfig(base, {
-    provider: provider ?? base.provider,
-    model: model ?? base.model,
-    temperature: temperature !== undefined ? Number(temperature) : base.temperature,
-    maxTokens: maxTokens !== undefined ? Number(maxTokens) : base.maxTokens,
-  });
 }

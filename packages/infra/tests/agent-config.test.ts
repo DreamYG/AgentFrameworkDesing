@@ -38,7 +38,7 @@ describe('loadAgentRuntimeConfigs', () => {
       expect(resolution.defaultModel).toBe('claude-sonnet-final');
       expect(resolution.agents['requirement-analyst']).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-5' });
       expect(resolution.agents['task-planner']).toMatchObject({ provider: 'openai', model: 'gpt-4o-mini', temperature: 0.3 });
-      expect(resolution.agents['reminder']).toEqual({ provider: 'local', model: 'local-mvp' });
+      expect(resolution.agents['reminder']).toEqual({ provider: 'anthropic', model: 'claude-sonnet-final' });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -52,5 +52,24 @@ describe('loadAgentRuntimeConfigs', () => {
     });
     expect(resolution.defaultModel).toBe('local-mvp');
     expect(resolution.agents['demo']).toEqual({ provider: 'local', model: 'local-mvp' });
+  });
+
+  it('ignores hardcoded defaults: unconfigured agents inherit NEXUS_DEFAULT_MODEL, per-agent ENV wins', () => {
+    const resolution = loadAgentRuntimeConfigs({
+      env: {
+        NEXUS_DEFAULT_MODEL: 'gpt-5.4',
+        NEXUS_AGENT_GENERAL_ASSISTANT_MODEL: 'gpt-4o-mini',
+      },
+      defaults: {
+        'general-assistant': { provider: 'anthropic', model: 'claude-sonnet' },
+        'task-planner': { provider: 'anthropic', model: 'claude-sonnet' },
+        'progress-tracker': { provider: 'anthropic', model: 'claude-haiku' },
+      },
+    });
+
+    expect(resolution.defaultModel).toBe('gpt-5.4');
+    expect(resolution.agents['general-assistant']).toEqual({ provider: 'openai', model: 'gpt-4o-mini' });
+    expect(resolution.agents['task-planner']).toEqual({ provider: 'openai', model: 'gpt-5.4' });
+    expect(resolution.agents['progress-tracker']).toEqual({ provider: 'openai', model: 'gpt-5.4' });
   });
 });

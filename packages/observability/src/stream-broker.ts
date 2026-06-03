@@ -9,12 +9,14 @@ import type {
 export class InMemoryAgentStreamBroker implements IAgentStreamBroker {
   private readonly streams = new Map<string, StreamDeliveryEnvelope[]>();
   private readonly acked = new Map<string, Set<number>>();
+  private readonly waiters = new Map<string, Set<() => void>>();
 
   async publish(envelope: StreamDeliveryEnvelope): Promise<void> {
     const stream = this.streams.get(envelope.runId) ?? [];
     const sequence = envelope.sequence > 0 ? envelope.sequence : stream.length + 1;
     stream.push({ ...envelope, sequence });
     this.streams.set(envelope.runId, stream);
+    this.notifyWaiters(envelope.runId);
   }
 
   async *subscribe(
@@ -25,9 +27,15 @@ export class InMemoryAgentStreamBroker implements IAgentStreamBroker {
     while (true) {
       const stream = this.streams.get(runId) ?? [];
       const next = stream.find((item) => item.sequence >= cursor);
-      if (!next) return;
-      cursor = next.sequence + 1;
-      yield next;
+      if (next) {
+        cursor = next.sequence + 1;
+        yield next;
+        if (next.event.type === 'completed') {
+          return;
+        }
+        continue;
+      }
+      await this.waitForPublish(runId);
     }
   }
 
@@ -39,11 +47,26 @@ export class InMemoryAgentStreamBroker implements IAgentStreamBroker {
   }
 
   replay(runId: string, fromSequence: number): AsyncIterable<StreamDeliveryEnvelope> {
-    return this.subscribe(runId, {
-      consumerId: 'replay',
-      fromSequence,
-      maxInFlight: Number.MAX_SAFE_INTEGER,
-    });
+    return this.drainBuffered(runId, fromSequence);
+  }
+
+  private async *drainBuffered(
+    runId: string,
+    fromSequence: number,
+  ): AsyncGenerator<StreamDeliveryEnvelope> {
+    let cursor = fromSequence;
+    while (true) {
+      const stream = this.streams.get(runId) ?? [];
+      const next = stream.find((item) => item.sequence >= cursor);
+      if (!next) {
+        return;
+      }
+      cursor = next.sequence + 1;
+      yield next;
+      if (next.event.type === 'completed') {
+        return;
+      }
+    }
   }
 
   async publishEvent(runId: string, event: AgentStreamEvent): Promise<void> {
@@ -53,6 +76,31 @@ export class InMemoryAgentStreamBroker implements IAgentStreamBroker {
       sequence: stream.length + 1,
       event,
       createdAt: new Date(),
+    });
+  }
+
+  private notifyWaiters(runId: string): void {
+    const set = this.waiters.get(runId);
+    if (!set) {
+      return;
+    }
+    for (const wake of set) {
+      wake();
+    }
+  }
+
+  private waitForPublish(runId: string): Promise<void> {
+    return new Promise((resolve) => {
+      const set = this.waiters.get(runId) ?? new Set();
+      const wake = () => {
+        set.delete(wake);
+        if (set.size === 0) {
+          this.waiters.delete(runId);
+        }
+        resolve();
+      };
+      set.add(wake);
+      this.waiters.set(runId, set);
     });
   }
 }
