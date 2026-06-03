@@ -54,6 +54,17 @@ describe('loadAgentRuntimeConfigs', () => {
     expect(resolution.agents['demo']).toEqual({ provider: 'local', model: 'local-mvp' });
   });
 
+  it('infers deepseek provider from deepseek- model prefix', () => {
+    const resolution = loadAgentRuntimeConfigs({
+      env: { NEXUS_DEFAULT_MODEL: 'deepseek-chat' },
+      defaults: {
+        'general-assistant': { provider: 'anthropic', model: 'claude-sonnet' },
+      },
+    });
+
+    expect(resolution.agents['general-assistant']).toEqual({ provider: 'deepseek', model: 'deepseek-chat' });
+  });
+
   it('ignores hardcoded defaults: unconfigured agents inherit NEXUS_DEFAULT_MODEL, per-agent ENV wins', () => {
     const resolution = loadAgentRuntimeConfigs({
       env: {

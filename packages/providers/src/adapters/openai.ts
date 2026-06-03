@@ -1,4 +1,9 @@
 import type { ILLMProvider, LLMCallOptions, LLMMessage, LLMStreamChunk } from '@nexus/shared';
+import {
+  buildOpenAIToolNameMap,
+  decodeToolNameFromOpenAI,
+  type OpenAIToolNameMap,
+} from '../openai-tool-names.js';
 
 /**
  * OpenAI Chat Completions Provider
@@ -18,7 +23,8 @@ export class OpenAIProvider implements ILLMProvider {
     messages: readonly LLMMessage[],
     options: LLMCallOptions,
   ): AsyncGenerator<LLMStreamChunk> {
-    const body = this.buildRequestBody(messages, options);
+    const toolNameMap = buildOpenAIToolNameMap(options.tools ?? []);
+    const body = this.buildRequestBody(messages, options, toolNameMap);
 
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -71,8 +77,9 @@ export class OpenAIProvider implements ILLMProvider {
             for (const toolCall of delta.tool_calls) {
               const index = toolCall.index;
               if (toolCall.id && toolCall.function?.name && !pending.has(index)) {
-                pending.set(index, { id: toolCall.id, name: toolCall.function.name });
-                yield { type: 'tool_call_start', id: toolCall.id, name: toolCall.function.name };
+                const canonicalName = decodeToolNameFromOpenAI(toolCall.function.name, toolNameMap);
+                pending.set(index, { id: toolCall.id, name: canonicalName });
+                yield { type: 'tool_call_start', id: toolCall.id, name: canonicalName };
               }
               const pendingCall = pending.get(index);
               if (pendingCall && toolCall.function?.arguments) {
@@ -139,7 +146,11 @@ export class OpenAIProvider implements ILLMProvider {
     return { urls, model };
   }
 
-  private buildRequestBody(messages: readonly LLMMessage[], options: LLMCallOptions): Record<string, unknown> {
+  private buildRequestBody(
+    messages: readonly LLMMessage[],
+    options: LLMCallOptions,
+    toolNameMap: OpenAIToolNameMap,
+  ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: options.model,
       stream: true,
@@ -156,7 +167,7 @@ export class OpenAIProvider implements ILLMProvider {
       body['tools'] = options.tools.map((tool) => ({
         type: 'function',
         function: {
-          name: tool.name,
+          name: toolNameMap.toApi.get(tool.name) ?? tool.name,
           description: tool.description,
           parameters: tool.inputSchema,
         },

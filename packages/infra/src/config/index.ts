@@ -14,11 +14,13 @@ const configSchema = z.object({
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional(),
 
-  LLM_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
+  LLM_PROVIDER: z.enum(['anthropic', 'openai', 'deepseek']).default('anthropic'),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_BASE_URL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().optional(),
+  DEEPSEEK_API_KEY: z.string().optional(),
+  DEEPSEEK_BASE_URL: z.string().optional(),
 
   NEXUS_AGENT_CONFIG_PATH: z.string().optional(),
   NEXUS_DEFAULT_MODEL: z.string().optional(),

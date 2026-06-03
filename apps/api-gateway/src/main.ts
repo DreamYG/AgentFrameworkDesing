@@ -11,7 +11,7 @@ import {
   type RedisLikeSessionStore,
 } from '@nexus/memory';
 import { bootstrapObservability } from '@nexus/observability';
-import { AnthropicProvider, OpenAIProvider, ProviderRouter } from '@nexus/providers';
+import { AnthropicProvider, DeepSeekProvider, OpenAIProvider, ProviderRouter } from '@nexus/providers';
 import {
   AgentRunsRepository,
   ApprovalRequestsRepository,
@@ -129,20 +129,24 @@ const anthropicProvider = config.ANTHROPIC_API_KEY
 const openaiProvider = config.OPENAI_API_KEY
   ? new OpenAIProvider({ apiKey: config.OPENAI_API_KEY, baseUrl: config.OPENAI_BASE_URL })
   : undefined;
+const deepseekProvider = config.DEEPSEEK_API_KEY
+  ? new DeepSeekProvider({ apiKey: config.DEEPSEEK_API_KEY, baseUrl: config.DEEPSEEK_BASE_URL })
+  : undefined;
 const localProvider = new LocalPhaseOneProvider();
 const providerRouter = new ProviderRouter(
   [
+    ...(deepseekProvider ? [{ prefix: 'deepseek-', provider: deepseekProvider, label: 'deepseek' }] : []),
     ...(anthropicProvider ? [{ prefix: 'claude-', provider: anthropicProvider, label: 'anthropic' }] : []),
     ...(openaiProvider ? [{ prefix: 'gpt-', provider: openaiProvider, label: 'openai' }] : []),
     ...(openaiProvider ? [{ prefix: 'o', provider: openaiProvider, label: 'openai-o' }] : []),
     { prefix: 'local-', provider: localProvider, label: 'local' },
   ],
-  anthropicProvider ?? openaiProvider ?? localProvider,
+  anthropicProvider ?? openaiProvider ?? deepseekProvider ?? localProvider,
 );
 
 const resolvedDefaultModel = config.NEXUS_DEFAULT_MODEL
   ?? process.env['NEXUS_MODEL']
-  ?? (anthropicProvider ? 'claude-sonnet-4-5' : openaiProvider ? 'gpt-4o-mini' : 'local-phase1-mvp');
+  ?? (anthropicProvider ? 'claude-sonnet-4-5' : openaiProvider ? 'gpt-4o-mini' : deepseekProvider ? 'deepseek-chat' : 'local-phase1-mvp');
 const agentDefaults = Object.fromEntries(PHASE_INTENT_AGENTS.map((agent) => [agent.id, {
   provider: 'local',
   model: resolvedDefaultModel,

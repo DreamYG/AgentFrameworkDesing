@@ -3,7 +3,7 @@ import { parse } from 'yaml';
 import { z } from 'zod';
 
 export const agentRuntimeConfigSchema = z.object({
-  provider: z.enum(['anthropic', 'openai', 'local']).default('local'),
+  provider: z.enum(['anthropic', 'openai', 'deepseek', 'local']).default('local'),
   model: z.string().min(1),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().optional(),
@@ -12,7 +12,7 @@ export const agentRuntimeConfigSchema = z.object({
 export type AgentRuntimeConfig = z.infer<typeof agentRuntimeConfigSchema>;
 
 const agentFileConfigSchema = z.object({
-  provider: z.enum(['anthropic', 'openai', 'local']).optional(),
+  provider: z.enum(['anthropic', 'openai', 'deepseek', 'local']).optional(),
   model: z.string().min(1).optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().optional(),
@@ -39,7 +39,7 @@ export interface AgentRuntimeConfigResolution {
  * 3. 全局默认模型 `NEXUS_DEFAULT_MODEL`（再回落到文件 `defaultModel`、`options.defaultModel`、`local-phase1-mvp`）
  *
  * 代码中不再保留任何硬编码的模型默认值；未显式配置的 Agent 一律使用全局默认模型。
- * provider 未显式指定时，根据最终 model 前缀推断（claude- 前缀走 anthropic，gpt- 或 o 前缀走 openai，其余走 local）。
+ * provider 未显式指定时，根据最终 model 前缀推断（deepseek- 走 deepseek，claude- 走 anthropic，gpt- 或 o 前缀走 openai，其余走 local）。
  *
  * @stability S3
  */
@@ -74,8 +74,11 @@ export function loadAgentRuntimeConfigs(options: {
   return { defaultModel, agents };
 }
 
-/** 推断 provider：claude- 前缀走 anthropic，gpt- 或 o 前缀走 openai，其余走 local */
+/** 推断 provider：deepseek- 走 deepseek，claude- 走 anthropic，gpt- 或 o 前缀走 openai，其余走 local */
 export function inferProviderFromModel(model: string): AgentRuntimeConfig['provider'] {
+  if (model.startsWith('deepseek-')) {
+    return 'deepseek';
+  }
   if (model.startsWith('claude-')) {
     return 'anthropic';
   }
